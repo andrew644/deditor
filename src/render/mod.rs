@@ -140,35 +140,20 @@ impl TextSystem {
         ts
     }
 
+    /// The family used for both measuring and drawing. A name without a
+    /// fixed-pitch face falls back to `Monospace`; the cell grid is only valid
+    /// when every glyph advances by exactly one cell.
     pub fn attrs<'a>(&'a self) -> Attrs<'a> {
         Attrs::new()
-            .family(Family::Name(&self.family_name))
+            .family(grid_family(&self.font_system, &self.family_name))
             .color(glyphon::Color::rgb(255, 255, 255))
     }
 
     pub fn remeasure(&mut self) {
-        let family = self.family_name.clone();
-        let has_named = self
-            .font_system
-            .db()
-            .faces()
-            .any(|f| f.families.iter().any(|(n, _)| n.eq_ignore_ascii_case(&family)));
-        let attrs = if has_named {
-            Attrs::new().family(Family::Name(&family))
-        } else {
-            Attrs::new().family(Family::Monospace)
-        };
+        let name = self.family_name.clone();
+        let font = grid_family(&self.font_system, &name);
         let line_height = self.font_size_px * 1.35;
-        let mut buf = Buffer::new(&mut self.font_system, Metrics::new(self.font_size_px, line_height));
-        buf.set_size(Some(10000.0), Some(line_height * 4.0));
-        buf.set_text("MMMMMMMMMM", &attrs, Shaping::Advanced, None);
-        buf.shape_until_scroll(&mut self.font_system, false);
-        let w = buf
-            .layout_runs()
-            .next()
-            .map(|r| r.line_w / 10.0)
-            .unwrap_or(self.font_size_px * 0.6);
-        self.cell_w = w.round().max(1.0);
+        self.cell_w = measure_cell(&mut self.font_system, font, self.font_size_px);
         self.cell_h = line_height.round().max(1.0);
     }
 
@@ -177,6 +162,31 @@ impl TextSystem {
         self.font_size_px = size_px;
         self.remeasure();
     }
+}
+
+pub fn grid_family<'a>(fonts: &FontSystem, name: &'a str) -> Family<'a> {
+    let named = fonts.db().faces().any(|f| {
+        f.monospaced && f.families.iter().any(|(n, _)| n.eq_ignore_ascii_case(name))
+    });
+    if named {
+        Family::Name(name)
+    } else {
+        Family::Monospace
+    }
+}
+
+pub fn measure_cell(fonts: &mut FontSystem, family: Family<'_>, size: f32) -> f32 {
+    let line_height = size * 1.35;
+    let attrs = Attrs::new().family(family);
+    let mut buf = Buffer::new(fonts, Metrics::new(size, line_height));
+    buf.set_size(Some(10000.0), Some(line_height * 4.0));
+    buf.set_text("MMMMMMMMMM", &attrs, Shaping::Advanced, None);
+    buf.shape_until_scroll(fonts, false);
+    buf.layout_runs()
+        .next()
+        .map(|r| r.line_w / 10.0)
+        .unwrap_or(size * 0.6)
+        .max(1.0)
 }
 
 
@@ -719,4 +729,77 @@ fn mkbuf(ts: &mut TextSystem, s: &str, w: f32, h: f32) -> Buffer {
     }
     b.shape_until_scroll(&mut ts.font_system, false);
     b
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn glyph_xs(fonts: &mut FontSystem, family: Family<'_>, text: &str) -> Vec<f32> {
+        let mut buf = Buffer::new(fonts, Metrics::new(14.0, 18.9));
+        buf.set_size(Some(10000.0), Some(80.0));
+        buf.set_text(text, &Attrs::new().family(family), Shaping::Advanced, None);
+        buf.shape_until_scroll(fonts, false);
+        buf.layout_runs()
+            .next()
+            .map(|r| r.glyphs.iter().map(|g| g.x).collect())
+            .unwrap_or_default()
+    }
+
+    fn face_name(fonts: &FontSystem, monospaced: bool) -> Option<String> {
+        fonts
+            .db()
+            .faces()
+            .find(|f| f.monospaced == monospaced)
+            .and_then(|f| f.families.first().map(|(n, _)| n.clone()))
+    }
+
+    #[test]
+    fn drawn_glyphs_land_on_the_measured_cell_grid() {
+        let mut fonts = FontSystem::new();
+        let name = "deditor-no-such-family".to_string();
+        let family = grid_family(&fonts, &name);
+        let cell = measure_cell(&mut fonts, family.clone(), 14.0);
+        let xs = glyph_xs(&mut fonts, family, "abcdefghijklmnopqrstuvwxyz");
+        assert!(xs.len() > 20);
+        for (i, pair) in xs.windows(2).enumerate() {
+            let advance = pair[1] - pair[0];
+            assert!(
+                (advance - cell).abs() < 0.01,
+                "column {i}: advance {advance} != cell {cell}"
+            );
+        }
+        let far = xs[25] - xs[0];
+        assert!(
+            (far - 25.0 * cell).abs() < 0.01,
+            "column 25 drawn at {far}, grid expects {}",
+            25.0 * cell
+        );
+    }
+
+    #[test]
+    fn unknown_family_uses_the_monospace_fallback() {
+        let fonts = FontSystem::new();
+        assert!(matches!(
+            grid_family(&fonts, "deditor-no-such-family"),
+            Family::Monospace
+        ));
+    }
+
+    #[test]
+    fn fixed_pitch_names_are_kept_and_proportional_names_are_not() {
+        let fonts = FontSystem::new();
+        if let Some(name) = face_name(&fonts, true) {
+            assert!(
+                matches!(grid_family(&fonts, &name), Family::Name(_)),
+                "{name} is fixed pitch and should be used"
+            );
+        }
+        if let Some(name) = face_name(&fonts, false) {
+            assert!(
+                matches!(grid_family(&fonts, &name), Family::Monospace),
+                "{name} is proportional and must not drive the cell grid"
+            );
+        }
+    }
 }
