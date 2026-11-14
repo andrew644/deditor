@@ -28,6 +28,9 @@ pub enum Motion {
     HalfPageDown,
     HalfPageUp,
     PageDown,
+    // API-complete counterpart of PageDown; Ctrl-b is taken by the buffers
+    // panel in the default keymap.
+    #[allow(dead_code)]
     PageUp,
 }
 
@@ -167,151 +170,6 @@ fn w_one(rope: &Rope, p: Pos, big: bool) -> Pos {
         }
         line += 1;
         col = 0;
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn rope(s: &str) -> Rope {
-        Rope::from_str(s)
-    }
-
-    fn at(line: usize, col: usize) -> Pos {
-        Pos { line, col }
-    }
-
-    fn m(rope: &Rope, p: Pos, motion: Motion) -> Pos {
-        apply(rope, p, motion, 1, 0, 20)
-    }
-
-    #[test]
-    fn w_moves_to_next_word() {
-        let r = rope("hello world");
-        assert_eq!(m(&r, at(0, 0), Motion::W), at(0, 6));
-    }
-
-    #[test]
-    fn w_three_on_words() {
-        let r = rope("a b c d");
-        assert_eq!(apply(&r, at(0, 0), Motion::W, 3, 0, 20), at(0, 6));
-    }
-
-    #[test]
-    fn w_punct_then_space() {
-        let r = rope("foo.bar baz");
-        assert_eq!(m(&r, at(0, 0), Motion::W), at(0, 3));
-        assert_eq!(m(&r, at(0, 3), Motion::W), at(0, 4));
-        assert_eq!(m(&r, at(0, 7), Motion::BigW), at(0, 8));
-    }
-
-    #[test]
-    fn w_at_line_end_goes_to_next_line() {
-        let r = rope("hello\nworld");
-        assert_eq!(m(&r, at(0, 5), Motion::W), at(1, 0));
-    }
-
-    #[test]
-    fn b_back_to_word_start() {
-        let r = rope("hello world");
-        assert_eq!(m(&r, at(0, 6), Motion::B), at(0, 0));
-        let r = rope("hello world\nagain");
-        assert_eq!(m(&r, at(1, 0), Motion::B), at(0, 6));
-    }
-
-    #[test]
-    fn b_reverse_big_word() {
-        let r = rope("foo.bar baz");
-        assert_eq!(m(&r, at(0, 10), Motion::BigB), at(0, 8));
-    }
-
-    #[test]
-    fn e_lands_on_word_end() {
-        let r = rope("hello world");
-        assert_eq!(m(&r, at(0, 0), Motion::E), at(0, 4));
-        assert_eq!(m(&r, at(0, 4), Motion::E), at(0, 10));
-    }
-
-    #[test]
-    fn ge_prev_word_end() {
-        let r = rope("hello world");
-        assert_eq!(m(&r, at(0, 10), Motion::GE), at(0, 4));
-    }
-
-    #[test]
-    fn gg_and_g_clamp() {
-        let r = rope("one\ntwo\nthree");
-        assert_eq!(m(&r, at(2, 3), Motion::GG), at(0, 3));
-        assert_eq!(m(&r, at(0, 1), Motion::G), at(2, 1));
-        assert_eq!(apply(&r, at(0, 0), Motion::G, 99, 0, 20), at(2, 0));
-    }
-
-    #[test]
-    fn basic_moves_clamp() {
-        let r = rope("ab\ncdef");
-        assert_eq!(m(&r, at(0, 1), Motion::L), at(0, 1));
-        assert_eq!(m(&r, at(0, 0), Motion::H), at(0, 0));
-        assert_eq!(m(&r, at(0, 1), Motion::J), at(1, 1));
-        assert_eq!(m(&r, at(0, 0), Motion::K), at(0, 0));
-        assert_eq!(apply(&r, at(0, 0), Motion::J, 50, 0, 20), at(1, 0));
-        assert_eq!(m(&r, at(1, 0), Motion::Zero), at(1, 0));
-        assert_eq!(m(&r, at(0, 1), Motion::Dollar), at(0, 1));
-    }
-
-    #[test]
-    fn caret_first_non_blank() {
-        let r = rope("    indented");
-        assert_eq!(m(&r, at(0, 9), Motion::Caret), at(0, 4));
-    }
-
-    #[test]
-    fn find_forward_and_till() {
-        let r = rope("xaxbx");
-        assert_eq!(m(&r, at(0, 0), Motion::Fwd('x')), at(0, 2));
-        assert_eq!(apply(&r, at(0, 0), Motion::Fwd('x'), 2, 0, 20), at(0, 4));
-        assert_eq!(m(&r, at(0, 0), Motion::TillFwd('x')), at(0, 1));
-        assert_eq!(m(&r, at(0, 0), Motion::Fwd('z')), at(0, 0));
-        assert_eq!(m(&r, at(0, 0), Motion::TillFwd('z')), at(0, 0));
-    }
-
-    #[test]
-    fn find_backward_and_till_back() {
-        let r = rope("xaxbx");
-        assert_eq!(m(&r, at(0, 4), Motion::Back('x')), at(0, 2));
-        assert_eq!(m(&r, at(0, 4), Motion::TillBack('x')), at(0, 3));
-        assert_eq!(m(&r, at(0, 0), Motion::Back('x')), at(0, 0));
-    }
-
-    #[test]
-    fn percent_matches_paren() {
-        let r = rope("(a(b)c)");
-        assert_eq!(m(&r, at(0, 0), Motion::Percent), at(0, 6));
-        assert_eq!(m(&r, at(0, 6), Motion::Percent), at(0, 0));
-        assert_eq!(m(&r, at(0, 2), Motion::Percent), at(0, 4));
-        assert_eq!(m(&r, at(0, 1), Motion::Percent), at(0, 1));
-    }
-
-    #[test]
-    fn page_and_half_page_clamp() {
-        let text = "l\n".repeat(30);
-        let text = text.trim_end();
-        let r = rope(text);
-        assert_eq!(apply(&r, at(0, 0), Motion::PageDown, 1, 0, 10), at(10, 0));
-        assert_eq!(apply(&r, at(0, 0), Motion::HalfPageDown, 1, 0, 10), at(5, 0));
-        assert_eq!(apply(&r, at(0, 0), Motion::PageUp, 1, 0, 10), at(0, 0));
-        assert_eq!(apply(&r, at(29, 0), Motion::PageDown, 1, 0, 10), at(29, 0));
-    }
-
-    #[test]
-    fn empty_rope_no_panic() {
-        let r = rope("");
-        assert_eq!(m(&r, at(0, 0), Motion::Dollar), at(0, 0));
-        assert_eq!(m(&r, at(0, 0), Motion::W), at(0, 0));
-        assert_eq!(m(&r, at(0, 0), Motion::B), at(0, 0));
-        assert_eq!(m(&r, at(0, 0), Motion::E), at(0, 0));
-        assert_eq!(m(&r, at(0, 0), Motion::G), at(0, 0));
-        assert_eq!(m(&r, at(0, 0), Motion::GE), at(0, 0));
     }
 }
 
@@ -470,8 +328,8 @@ fn same_class(a: char, b: char, big: bool) -> bool {
 fn find_fwd(rope: &Rope, p: Pos, c: char, n: usize, till: bool) -> Option<Pos> {
     let text: Vec<char> = line_text(rope, p.line).chars().collect();
     let mut seen = 0;
-    for i in p.col + 1..text.len() {
-        if text[i] == c {
+    for (i, &ch) in text.iter().enumerate().skip(p.col + 1) {
+        if ch == c {
             seen += 1;
             if seen == n {
                 let col = if till { i - 1 } else { i };
@@ -530,10 +388,10 @@ fn percent(rope: &Rope, p: Pos) -> Pos {
     };
     if is_open(text[i]) {
         let mut depth = 0isize;
-        for j in i..text.len() {
-            if text[j] == open {
+        for (j, &ch) in text.iter().enumerate().skip(i) {
+            if ch == open {
                 depth += 1;
-            } else if text[j] == close {
+            } else if ch == close {
                 depth -= 1;
                 if depth == 0 {
                     return Pos { line: p.line, col: j };
@@ -554,4 +412,149 @@ fn percent(rope: &Rope, p: Pos) -> Pos {
         }
     }
     p
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rope(s: &str) -> Rope {
+        Rope::from_str(s)
+    }
+
+    fn at(line: usize, col: usize) -> Pos {
+        Pos { line, col }
+    }
+
+    fn m(rope: &Rope, p: Pos, motion: Motion) -> Pos {
+        apply(rope, p, motion, 1, 0, 20)
+    }
+
+    #[test]
+    fn w_moves_to_next_word() {
+        let r = rope("hello world");
+        assert_eq!(m(&r, at(0, 0), Motion::W), at(0, 6));
+    }
+
+    #[test]
+    fn w_three_on_words() {
+        let r = rope("a b c d");
+        assert_eq!(apply(&r, at(0, 0), Motion::W, 3, 0, 20), at(0, 6));
+    }
+
+    #[test]
+    fn w_punct_then_space() {
+        let r = rope("foo.bar baz");
+        assert_eq!(m(&r, at(0, 0), Motion::W), at(0, 3));
+        assert_eq!(m(&r, at(0, 3), Motion::W), at(0, 4));
+        assert_eq!(m(&r, at(0, 7), Motion::BigW), at(0, 8));
+    }
+
+    #[test]
+    fn w_at_line_end_goes_to_next_line() {
+        let r = rope("hello\nworld");
+        assert_eq!(m(&r, at(0, 5), Motion::W), at(1, 0));
+    }
+
+    #[test]
+    fn b_back_to_word_start() {
+        let r = rope("hello world");
+        assert_eq!(m(&r, at(0, 6), Motion::B), at(0, 0));
+        let r = rope("hello world\nagain");
+        assert_eq!(m(&r, at(1, 0), Motion::B), at(0, 6));
+    }
+
+    #[test]
+    fn b_reverse_big_word() {
+        let r = rope("foo.bar baz");
+        assert_eq!(m(&r, at(0, 10), Motion::BigB), at(0, 8));
+    }
+
+    #[test]
+    fn e_lands_on_word_end() {
+        let r = rope("hello world");
+        assert_eq!(m(&r, at(0, 0), Motion::E), at(0, 4));
+        assert_eq!(m(&r, at(0, 4), Motion::E), at(0, 10));
+    }
+
+    #[test]
+    fn ge_prev_word_end() {
+        let r = rope("hello world");
+        assert_eq!(m(&r, at(0, 10), Motion::GE), at(0, 4));
+    }
+
+    #[test]
+    fn gg_and_g_clamp() {
+        let r = rope("one\ntwo\nthree");
+        assert_eq!(m(&r, at(2, 3), Motion::GG), at(0, 3));
+        assert_eq!(m(&r, at(0, 1), Motion::G), at(2, 1));
+        assert_eq!(apply(&r, at(0, 0), Motion::G, 99, 0, 20), at(2, 0));
+    }
+
+    #[test]
+    fn basic_moves_clamp() {
+        let r = rope("ab\ncdef");
+        assert_eq!(m(&r, at(0, 1), Motion::L), at(0, 1));
+        assert_eq!(m(&r, at(0, 0), Motion::H), at(0, 0));
+        assert_eq!(m(&r, at(0, 1), Motion::J), at(1, 1));
+        assert_eq!(m(&r, at(0, 0), Motion::K), at(0, 0));
+        assert_eq!(apply(&r, at(0, 0), Motion::J, 50, 0, 20), at(1, 0));
+        assert_eq!(m(&r, at(1, 0), Motion::Zero), at(1, 0));
+        assert_eq!(m(&r, at(0, 1), Motion::Dollar), at(0, 1));
+    }
+
+    #[test]
+    fn caret_first_non_blank() {
+        let r = rope("    indented");
+        assert_eq!(m(&r, at(0, 9), Motion::Caret), at(0, 4));
+    }
+
+    #[test]
+    fn find_forward_and_till() {
+        let r = rope("xaxbx");
+        assert_eq!(m(&r, at(0, 0), Motion::Fwd('x')), at(0, 2));
+        assert_eq!(apply(&r, at(0, 0), Motion::Fwd('x'), 2, 0, 20), at(0, 4));
+        assert_eq!(m(&r, at(0, 0), Motion::TillFwd('x')), at(0, 1));
+        assert_eq!(m(&r, at(0, 0), Motion::Fwd('z')), at(0, 0));
+        assert_eq!(m(&r, at(0, 0), Motion::TillFwd('z')), at(0, 0));
+    }
+
+    #[test]
+    fn find_backward_and_till_back() {
+        let r = rope("xaxbx");
+        assert_eq!(m(&r, at(0, 4), Motion::Back('x')), at(0, 2));
+        assert_eq!(m(&r, at(0, 4), Motion::TillBack('x')), at(0, 3));
+        assert_eq!(m(&r, at(0, 0), Motion::Back('x')), at(0, 0));
+    }
+
+    #[test]
+    fn percent_matches_paren() {
+        let r = rope("(a(b)c)");
+        assert_eq!(m(&r, at(0, 0), Motion::Percent), at(0, 6));
+        assert_eq!(m(&r, at(0, 6), Motion::Percent), at(0, 0));
+        assert_eq!(m(&r, at(0, 2), Motion::Percent), at(0, 4));
+        assert_eq!(m(&r, at(0, 1), Motion::Percent), at(0, 1));
+    }
+
+    #[test]
+    fn page_and_half_page_clamp() {
+        let text = "l\n".repeat(30);
+        let text = text.trim_end();
+        let r = rope(text);
+        assert_eq!(apply(&r, at(0, 0), Motion::PageDown, 1, 0, 10), at(10, 0));
+        assert_eq!(apply(&r, at(0, 0), Motion::HalfPageDown, 1, 0, 10), at(5, 0));
+        assert_eq!(apply(&r, at(0, 0), Motion::PageUp, 1, 0, 10), at(0, 0));
+        assert_eq!(apply(&r, at(29, 0), Motion::PageDown, 1, 0, 10), at(29, 0));
+    }
+
+    #[test]
+    fn empty_rope_no_panic() {
+        let r = rope("");
+        assert_eq!(m(&r, at(0, 0), Motion::Dollar), at(0, 0));
+        assert_eq!(m(&r, at(0, 0), Motion::W), at(0, 0));
+        assert_eq!(m(&r, at(0, 0), Motion::B), at(0, 0));
+        assert_eq!(m(&r, at(0, 0), Motion::E), at(0, 0));
+        assert_eq!(m(&r, at(0, 0), Motion::G), at(0, 0));
+        assert_eq!(m(&r, at(0, 0), Motion::GE), at(0, 0));
+    }
 }

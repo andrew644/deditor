@@ -10,10 +10,6 @@ pub fn parse_hex(s: &str) -> Option<u32> {
     Some(0xFF00_0000 | v)
 }
 
-pub fn hex_of(c: u32) -> String {
-    format!("#{:06x}", c & 0xFF_FFFF)
-}
-
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Theme {
@@ -183,10 +179,6 @@ impl RgbTheme {
         };
         (s, w)
     }
-
-    pub fn from_theme(t: &Theme) -> Self {
-        Self::from_theme_checked(t).0
-    }
 }
 
 pub const FONT_SIZES: [f32; 6] = [10.0, 12.0, 14.0, 16.0, 20.0, 24.0];
@@ -319,8 +311,10 @@ mod tests {
 
     #[test]
     fn bad_color_warns_and_keeps_default() {
-        let mut t = Theme::default();
-        t.fg = "blorbe".into();
+        let t = Theme {
+            fg: "blorbe".into(),
+            ..Theme::default()
+        };
         let (rgb, w) = RgbTheme::from_theme_checked(&t);
         assert_eq!(rgb.fg, 0xFFD8D8DA);
         assert_eq!(w.len(), 1);

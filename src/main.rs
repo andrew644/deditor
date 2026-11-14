@@ -11,6 +11,7 @@ use winit::window::Window;
 mod app;
 mod buffer;
 mod fuzzy;
+mod lsp;
 mod motions;
 mod textobjects;
 mod config;
@@ -60,6 +61,8 @@ fn main() -> Result<()> {
         pointer_tab: false,
         last_mouse: None,
         text_sig: ("monospace".into(), 14.0),
+        proxy: Some(event_loop.create_proxy()),
+        pump_armed: false,
     };
     event_loop.run_app(&mut app)?;
     Ok(())
@@ -77,6 +80,8 @@ struct App {
     pointer_tab: bool,
     last_mouse: Option<(f64, f64)>,
     text_sig: (String, f32),
+    proxy: Option<winit::event_loop::EventLoopProxy<()>>,
+    pump_armed: bool,
 }
 
 impl ApplicationHandler for App {
@@ -121,6 +126,13 @@ impl ApplicationHandler for App {
         }
     }
 
+    fn user_event(&mut self, _el: &ActiveEventLoop, _: ()) {
+        self.pump_armed = false;
+        if let Some(w) = &self.window {
+            w.request_redraw();
+        }
+    }
+
     fn window_event(
         &mut self,
         event_loop: &ActiveEventLoop,
@@ -129,11 +141,10 @@ impl ApplicationHandler for App {
     ) {
         match event {
             WindowEvent::Resized(size) => {
-                if let Some(gpu) = &mut self.gpu {
-                    if size.width > 0 && size.height > 0 {
+                if let Some(gpu) = &mut self.gpu
+                    && size.width > 0 && size.height > 0 {
                         gpu.configure(size.width, size.height);
                     }
-                }
                 if let Some(w) = &self.window {
                     w.request_redraw();
                 }
@@ -166,6 +177,7 @@ impl ApplicationHandler for App {
                         let i = (d - 1) as usize;
                         if i < ed.buffers.len() {
                             ed.active = i;
+                            ed.ensure_lsp();
                         }
                     }
                     if let Some(w) = &self.window {
@@ -189,14 +201,13 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::Ime(Ime::Commit(s)) => {
-                if let Some(ed) = &mut self.editor {
-                    if self.ime_allowed {
+                if let Some(ed) = &mut self.editor
+                    && self.ime_allowed {
                         ed.buf_mut().insert_text(&s, true);
                         if let Some(w) = &self.window {
                             w.request_redraw();
                         }
                     }
-                }
             }
             WindowEvent::Ime(_) => {}
             WindowEvent::MouseWheel { delta, .. } => {
@@ -213,7 +224,7 @@ impl ApplicationHandler for App {
                     let b = ed.buf_mut();
                     let max_top = b.rope.len_lines().saturating_sub(1);
                     let nt = b.view_top as i64 - (notches * 3.0).round() as i64;
-                    b.view_top = nt.clamp(0, max_top.max(0) as i64) as usize;
+                    b.view_top = nt.clamp(0, max_top as i64) as usize;
                     let _ = rows;
                     if let Some(w) = &self.window {
                         w.request_redraw();
@@ -243,11 +254,11 @@ impl ApplicationHandler for App {
                     return;
                 };
                 if let Some(i) = self.hit_tab(mx, my) {
-                    if let Some(ed) = &mut self.editor {
-                        if i < ed.buffers.len() {
+                    if let Some(ed) = &mut self.editor
+                        && i < ed.buffers.len() {
                             ed.active = i;
+                            ed.ensure_lsp();
                         }
-                    }
                     if let Some(w) = &self.window {
                         w.request_redraw();
                     }
@@ -327,29 +338,30 @@ impl App {
                 height: gpu.config.height,
             },
         );
-        let frame = match gpu.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(f) => f,
-            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
+        let got = gpu.surface.get_current_texture();
+        let frame = match got {
+            wgpu::CurrentSurfaceTexture::Success(f)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
+            other => {
+                let lost = matches!(other, wgpu::CurrentSurfaceTexture::Lost);
+                let reconfigure =
+                    matches!(other, wgpu::CurrentSurfaceTexture::Outdated);
+                drop(other);
+                if lost {
+                    let Some(w) = &self.window else { return };
+                    gpu.surface = gpu.instance.create_surface(w.clone()).unwrap();
+                    gpu.configure(gpu.config.width, gpu.config.height);
+                    w.request_redraw();
+                    return;
+                }
+                if reconfigure {
+                    gpu.configure(gpu.config.width, gpu.config.height);
+                }
                 if let Some(w) = &self.window {
                     w.request_redraw();
                 }
                 return;
             }
-            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Suboptimal(_) => {
-                gpu.configure(gpu.config.width, gpu.config.height);
-                if let Some(w) = &self.window {
-                    w.request_redraw();
-                }
-                return;
-            }
-            wgpu::CurrentSurfaceTexture::Lost => {
-                let Some(w) = &self.window else { return };
-                gpu.surface = gpu.instance.create_surface(w.clone()).unwrap();
-                gpu.configure(gpu.config.width, gpu.config.height);
-                w.request_redraw();
-                return;
-            }
-            wgpu::CurrentSurfaceTexture::Validation => return,
         };
         let view = frame
             .texture
@@ -357,8 +369,20 @@ impl App {
         let rows = (gpu.config.height as f32 / text.cell_h.max(1.0)) as usize;
         ed.view_rows = rows.saturating_sub(2);
         ed.poll_files();
+        ed.poll_lsp();
         ed.scroll_to_cursor(rows.saturating_sub(2));
+        let lsp_busy = ed.lsp.busy();
         self.tab_ranges = render::tab_hit_ranges(ed, text.cell_w.max(1.0));
+        if lsp_busy
+            && !self.pump_armed
+            && let Some(p) = self.proxy.clone()
+        {
+            self.pump_armed = true;
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                let _ = p.send_event(());
+            });
+        }
         let mut encoder = gpu
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });

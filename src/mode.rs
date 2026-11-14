@@ -38,5 +38,4 @@ pub enum Pending {
     F { forward: bool, to: bool },
     R,
     TextObj { op: Operator, inner: bool },
-    Count,
 }

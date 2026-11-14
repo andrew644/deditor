@@ -32,6 +32,7 @@ pub struct Editor {
     pub panel_cursor: usize,
     pub files_rx: Option<std::sync::mpsc::Receiver<Vec<String>>>,
     pub file_items: Vec<String>,
+    pub lsp: crate::lsp::LspManager,
 }
 
 
@@ -79,11 +80,10 @@ fn find_wrap(chars: &[char], t: &[char], start: usize, back: bool) -> Option<usi
         (0..=hi).rev().find(|&i| hit(i)).or_else(|| ((hi + 1)..=(n - tl)).rev().find(|&i| hit(i)))
     } else {
         let lo = start.min(n - tl + 1);
-        if lo <= n - tl {
-            if let Some(i) = (lo..=(n - tl)).find(|&i| hit(i)) {
+        if lo <= n - tl
+            && let Some(i) = (lo..=(n - tl)).find(|&i| hit(i)) {
                 return Some(i);
             }
-        }
         (0..lo.min(n - tl + 1)).find(|&i| hit(i))
     }
 }
@@ -121,6 +121,7 @@ impl Editor {
             panel_cursor: 0,
             files_rx: None,
             file_items: Vec::new(),
+            lsp: crate::lsp::LspManager::new(),
         };
         if let Some(p) = path {
             match Buffer::load(p) {
@@ -134,6 +135,7 @@ impl Editor {
                 }
             }
         }
+        ed.ensure_lsp();
         if !warnings.is_empty() {
             ed.set_status(warnings.join("; "), true);
         }
@@ -198,6 +200,7 @@ impl Editor {
     pub fn leave_insert(&mut self) {
         if self.mode == Mode::Insert {
             self.coalesce_open = false;
+            self.lsp.completion = None;
             self.mode = Mode::Normal;
             self.buf_mut().clamp();
         }
@@ -210,13 +213,12 @@ impl Editor {
     }
 
     pub fn start_visual(&mut self, linewise: bool) {
-        if self.mode == Mode::Visual {
-            if self.visual_linewise == linewise || !linewise {
+        if self.mode == Mode::Visual
+            && (self.visual_linewise == linewise || !linewise) {
                 self.mode = Mode::Normal;
                 self.visual_anchor = None;
                 return;
             }
-        }
         self.mode = Mode::Visual;
         self.visual_linewise = linewise;
         let c = self.buf().cursor;
@@ -699,20 +701,23 @@ impl Editor {
                                 let name = b.display_name();
                                 self.buffers[self.active] = b;
                                 self.set_status(format!("\"{name}\" {n}L loaded"), false);
+                                self.ensure_lsp();
                             }
                             Err(e) => self.set_status(e.to_string(), true),
                         }
                     }
                     Cmd::BNext => {
                         if !self.buffers.is_empty() {
-                            self.active = (self.active + 1) % self.buffers.len();
+                            self.activate((self.active + 1) % self.buffers.len());
                         }
+                        self.ensure_lsp();
                     }
                     Cmd::BPrev => {
                         let len = self.buffers.len();
                         if len > 0 {
-                            self.active = (self.active + len - 1) % len;
+                            self.activate((self.active + len - 1) % len);
                         }
+                        self.ensure_lsp();
                     }
                     Cmd::Settings => self.open_panel(crate::fuzzy::Panel::Settings),
                 }
@@ -730,11 +735,143 @@ impl Editor {
                 let lines = b.rope.len_lines();
                 let chars = b.rope.len_chars();
                 self.set_status(format!("\"{name}\" {lines}L {chars}C written"), false);
+                self.notify_saved();
             }
             Err(e) => {
                 let msg = e.to_string();
                 self.set_status(msg, true);
             }
+        }
+    }
+
+    pub fn ensure_lsp(&mut self) {
+        let p = self.buf().path.clone();
+        self.lsp.ensure(p.as_ref());
+    }
+
+    pub fn hover_cur(&mut self) {
+        if let Some(p) = self.buf().path.clone() {
+            let c = self.buf().cursor;
+            self.lsp.hover_at(&p, c);
+        }
+    }
+
+    pub fn goto_definition_cur(&mut self) {
+        if let Some(p) = self.buf().path.clone() {
+            let c = self.buf().cursor;
+            self.lsp.goto_definition(&p, c);
+        }
+    }
+
+    /// Trigger after `.` / `::` / `->`; while open, re-request as the user
+    /// keeps typing inside the member-access context.
+    pub fn maybe_completion(&mut self, typed: &str) {
+        let open = self.lsp.completion.is_some();
+        let Some(path) = self.buf().path.clone() else {
+            if open {
+                self.lsp.completion = None;
+            }
+            return;
+        };
+        let line = self.buf().cursor.line;
+        let col = self.buf().cursor.col;
+        let line_text: String = self.buf().rope.line(line).chars().collect();
+        let chars: Vec<char> = line_text.chars().collect();
+        let col = col.min(chars.len());
+        let before: String = chars.iter().take(col).collect();
+        let mut i = col;
+        while i > 0 && (chars[i - 1].is_alphanumeric() || chars[i - 1] == '_') {
+            i -= 1;
+        }
+        let ctx = i > 0 && matches!(chars[i - 1], '.' | ':' | '>');
+        let fire = match typed {
+            "." => before.ends_with('.'),
+            ":" => before.ends_with("::"),
+            "-" => before.ends_with("->"),
+            _ => open && i < col && ctx,
+        };
+        if fire {
+            let text = self.buf().rope.to_string();
+            self.lsp.request_completion(&path, Pos { line, col }, &text);
+        } else if open {
+            self.lsp.completion = None;
+        }
+    }
+
+    pub fn comp_next(&mut self) {
+        if let Some(cs) = self.lsp.completion.as_mut()
+            && !cs.items.is_empty()
+        {
+            cs.selected = (cs.selected + 1) % cs.items.len();
+        }
+    }
+
+    pub fn comp_prev(&mut self) {
+        if let Some(cs) = self.lsp.completion.as_mut()
+            && !cs.items.is_empty()
+        {
+            cs.selected = (cs.selected + cs.items.len() - 1) % cs.items.len();
+        }
+    }
+
+    pub fn comp_cancel(&mut self) {
+        self.lsp.completion = None;
+    }
+
+    pub fn comp_accept(&mut self) {
+        let Some(cs) = &self.lsp.completion else { return };
+        let Some(it) = cs.items.get(cs.selected) else { return };
+        let text = it.text.clone();
+        let (line, col) = (cs.line, cs.col);
+        self.lsp.completion = None;
+        let co = self.coalesce_open;
+        // drop the ident chars typed since the popup opened; items carry the
+        // full insert text
+        let c = self.buf().cursor;
+        if c.line == line && c.col > col {
+            self.buf_mut().delete_text(Pos { line, col }, c);
+        }
+        self.buf_mut().insert_text(&text, co);
+    }
+
+    fn activate(&mut self, i: usize) {
+        if i != self.active {
+            self.lsp.hover = None;
+            self.lsp.completion = None;
+        }
+        self.active = i;
+    }
+
+    pub fn poll_lsp(&mut self) {
+        for ev in self.lsp.poll() {
+            match ev {
+                crate::lsp::Ev::Goto { path, line, col } => {
+                    if !self.buffers.iter().any(|b| b.path.as_ref() == Some(&path)) {
+                        self.open_path(path.clone());
+                    }
+                    if let Some(i) =
+                        self.buffers.iter().position(|b| b.path.as_ref() == Some(&path))
+                    {
+                        self.activate(i);
+                        self.buf_mut().cursor = Pos { line, col };
+                        let rows = self.view_rows.max(1);
+                        self.scroll_to_cursor(rows);
+                        self.ensure_lsp();
+                    } else {
+                        self.set_status(format!("cannot open {}", path.display()), true);
+                    }
+                }
+                crate::lsp::Ev::NoDef => {
+                    self.set_status("No definition found".into(), true);
+                }
+            }
+        }
+    }
+
+    fn notify_saved(&mut self) {
+        if let Some(p) = self.buf().path.clone() {
+            let text = self.buf().rope.to_string();
+            self.lsp.on_saved(&p, &text);
         }
     }
 
@@ -847,7 +984,7 @@ impl Editor {
             crate::fuzzy::Panel::Buffers => {
                 self.close_panel();
                 if idx < self.buffers.len() {
-                    self.active = idx;
+                    self.activate(idx);
                 }
             }
             crate::fuzzy::Panel::None => {}
@@ -889,10 +1026,12 @@ impl Editor {
                 };
                 if empty_cur {
                     self.buffers[self.active] = b;
+                    self.lsp.hover = None;
                 } else {
                     self.buffers.push(b);
-                    self.active = self.buffers.len() - 1;
+                    self.activate(self.buffers.len() - 1);
                 }
+                self.ensure_lsp();
             }
             Err(e) => {
                 let msg = e.to_string();
@@ -903,11 +1042,10 @@ impl Editor {
 }
 
 fn shrink_tilde(p: &str) -> String {
-    if let Some(rest) = p.strip_prefix("~/") {
-        if let Some(home) = std::env::var_os("HOME") {
+    if let Some(rest) = p.strip_prefix("~/")
+        && let Some(home) = std::env::var_os("HOME") {
             return format!("{}/{rest}", home.to_string_lossy());
         }
-    }
     p.to_string()
 }
 

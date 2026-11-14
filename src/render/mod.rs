@@ -97,7 +97,6 @@ impl Gpu {
 pub struct TextSystem {
     pub font_system: FontSystem,
     pub swash_cache: SwashCache,
-    pub cache: Cache,
     pub viewport: Viewport,
     pub atlas: TextAtlas,
     pub renderer: TextRenderer,
@@ -129,7 +128,6 @@ impl TextSystem {
         let mut ts = Self {
             font_system,
             swash_cache,
-            cache,
             viewport,
             atlas,
             renderer,
@@ -170,7 +168,7 @@ impl TextSystem {
             .next()
             .map(|r| r.line_w / 10.0)
             .unwrap_or(self.font_size_px * 0.6);
-        self.cell_w = (w.round() as f32).max(1.0);
+        self.cell_w = w.round().max(1.0);
         self.cell_h = line_height.round().max(1.0);
     }
 
@@ -449,7 +447,115 @@ pub fn draw_content(
         };
         status_s = format!(" {p}{}", ed.cmdline);
     }
-    let err_s = ed.status.clone().unwrap_or_default();
+    let diags = ed.lsp.diags_for(ed.buf().path.as_ref());
+    let cursor_diag = diags
+        .iter()
+        .find(|d| d.line == ed.buf().cursor.line)
+        .map(|d| {
+            let tag = if d.severity == crate::lsp::SEV_WARN {
+                "WARN"
+            } else {
+                "ERR"
+            };
+            format!("{tag}: {}", d.message.replace('\n', " "))
+        });
+    let err_s = ed
+        .status
+        .clone()
+        .or(cursor_diag)
+        .unwrap_or_default();
+    for d in diags {
+        if d.line < ed.buf().view_top || d.line - ed.buf().view_top >= l.rows as usize {
+            continue;
+        }
+        let y = (1 + d.line - ed.buf().view_top) as f32 * ch;
+        rects.push(rects::RectInstance {
+            x: 0.0,
+            y,
+            w: 4.0f32.max(cw * 0.35),
+            h: ch,
+            color: if d.severity == crate::lsp::SEV_WARN {
+                theme.warn
+            } else {
+                theme.error
+            },
+        });
+    }
+
+    let hover_s = ed
+        .lsp
+        .hover
+        .clone()
+        .unwrap_or_default()
+        .lines()
+        .take(8)
+        .map(|s| format!("{:<80.80}", s.replace('\t', "    ")))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let hover_open = !hover_s.is_empty() && ed.panel == crate::fuzzy::Panel::None;
+    let mut hover_pos = None;
+    if hover_open {
+        let nrows = hover_s.lines().count() as f32;
+        let row = (1 + ed.buf().cursor.line.saturating_sub(ed.buf().view_top)) as f32;
+        let hw = 60.0f32.max(cw * 30.0).min(w);
+        let hx = (l.gutter_cols as f32 * cw + 10.0 * cw).min(w - hw);
+        let hy = (row * ch + ch).min(h - (nrows + 1.0) * ch);
+        hover_pos = Some((hx, hy));
+        rects.push(rects::RectInstance {
+            x: hx,
+            y: hy,
+            w: hw,
+            h: (nrows + 1.0) * ch,
+            color: theme.popup_bg,
+        });
+    }
+
+    let mut comp_s = String::new();
+    let mut comp_pos = None;
+    if let Some(cs) = &ed.lsp.completion {
+        let n = cs.items.len();
+        let max_rows = 8usize;
+        let start = if cs.selected < max_rows {
+            0
+        } else {
+            cs.selected - max_rows + 1
+        };
+        let comp_sel_row = cs.selected - start;
+        if n == 0 {
+            comp_s.push_str("  ...");
+        }
+        for (row, it) in cs.items.iter().skip(start).take(max_rows).enumerate() {
+            if row > 0 {
+                comp_s.push('\n');
+            }
+            comp_s.push_str(if row == comp_sel_row { "> " } else { "  " });
+            comp_s.push(it.kind);
+            comp_s.push(' ');
+            comp_s.push_str(&format!("{:<38.38}", it.text));
+        }
+        let nrows = comp_s.lines().count() as f32;
+        let row = (1 + cs.line.saturating_sub(ed.buf().view_top)) as f32;
+        let cwid = 41.0f32 * cw;
+        let cx = ((l.gutter_cols as f32 + cs.col as f32) * cw).min(w - cwid);
+        let cy = ((row + 1.0) * ch).min(h - nrows * ch);
+        comp_pos = Some((cx, cy, nrows));
+        rects.push(rects::RectInstance {
+            x: cx,
+            y: cy,
+            w: cwid,
+            h: nrows * ch,
+            color: theme.popup_bg,
+        });
+        if n > 0 {
+            rects.push(rects::RectInstance {
+                x: cx,
+                y: cy + comp_sel_row as f32 * ch,
+                w: cwid,
+                h: ch,
+                color: theme.popup_sel,
+            });
+        }
+    }
 
     let mut popup_s = String::new();
     let popup_open = ed.panel != crate::fuzzy::Panel::None;
@@ -491,6 +597,8 @@ pub fn draw_content(
     let mut tb_status = mkbuf(ts, &status_s, w, h);
     let mut tb_err = mkbuf(ts, &err_s, w, h);
     let mut tb_popup = mkbuf(ts, &popup_s, w, h);
+    let mut tb_hover = mkbuf(ts, &hover_s, w, h);
+    let mut tb_comp = mkbuf(ts, &comp_s, w, h);
 
     let mut areas: Vec<(&mut Buffer, f32, f32, u32)> = vec![
         (
@@ -506,6 +614,12 @@ pub fn draw_content(
     ];
     if popup_open {
         areas.push((&mut tb_popup, cw, ch, theme.popup_fg));
+    }
+    if let Some((hx, hy)) = hover_pos {
+        areas.push((&mut tb_hover, hx, hy, theme.popup_fg));
+    }
+    if let Some((cx, cy, _)) = comp_pos {
+        areas.push((&mut tb_comp, cx, cy, theme.popup_fg));
     }
     {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -591,7 +705,6 @@ fn pending_label(ed: &crate::app::Editor) -> String {
         }
         Pending::R => s.push('r'),
         Pending::TextObj { inner, .. } => s.push(if *inner { 'i' } else { 'a' }),
-        Pending::Count => {}
     }
     s
 }

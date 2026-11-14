@@ -94,6 +94,7 @@ fn normal_key(ed: &mut Editor, ev: &KeyEvent, mods: ModifiersState) {
     if mods.alt_key() || mods.super_key() {
         return;
     }
+    ed.lsp.hover = None;
     if ev.logical_key == Key::Named(NamedKey::Escape) {
         ed.clear_pending();
         if ed.mode == Mode::Visual {
@@ -123,8 +124,8 @@ fn normal_key(ed: &mut Editor, ev: &KeyEvent, mods: ModifiersState) {
         ed.buf_mut().clamp();
         return;
     }
-    if let Some(c) = k {
-        if let Some(d) = c.chars().next().and_then(|ch| ch.to_digit(10)) {
+    if let Some(c) = k
+        && let Some(d) = c.chars().next().and_then(|ch| ch.to_digit(10)) {
             if ed.count == 0 && d == 0 {
                 ed.run_motion(Motion::Zero, 1);
             } else {
@@ -132,7 +133,6 @@ fn normal_key(ed: &mut Editor, ev: &KeyEvent, mods: ModifiersState) {
             }
             return;
         }
-    }
     let count = if ed.count == 0 { 1 } else { ed.count };
     match ed.pending {
         Pending::G => {
@@ -141,6 +141,7 @@ fn normal_key(ed: &mut Editor, ev: &KeyEvent, mods: ModifiersState) {
                 Some("g") => ed.run_motion(Motion::GG, count),
                 Some("e") => ed.run_motion(Motion::GE, count),
                 Some("E") => ed.run_motion(Motion::BigGE, count),
+                Some("d") => ed.goto_definition_cur(),
                 _ => ed.count = 0,
             }
             return;
@@ -207,7 +208,6 @@ fn normal_key(ed: &mut Editor, ev: &KeyEvent, mods: ModifiersState) {
             return;
         }
         Pending::None => {}
-        Pending::Count => {}
     }
     let Some(k) = k else { return };
     if ed.mode == Mode::Visual {
@@ -225,6 +225,7 @@ fn normal_key(ed: &mut Editor, ev: &KeyEvent, mods: ModifiersState) {
         }
         "G" => ed.run_motion(Motion::G, count),
         "g" => ed.pending = Pending::G,
+        "K" => ed.hover_cur(),
         "f" => ed.pending = Pending::F { forward: true, to: true },
         "F" => ed.pending = Pending::F { forward: false, to: true },
         "t" => ed.pending = Pending::F { forward: true, to: false },
@@ -373,28 +374,45 @@ fn insert_key(ed: &mut Editor, ev: &KeyEvent, mods: ModifiersState) {
     if mods.alt_key() || mods.super_key() {
         return;
     }
+    let popup = ed.lsp.completion.is_some();
     if mods.control_key() {
         match key_char(ev) {
             Some("c") | Some("[") => ed.leave_insert(),
+            Some("n") if popup => ed.comp_next(),
+            Some("p") if popup => ed.comp_prev(),
+            Some("y") | Some("e") if popup => ed.comp_accept(),
             _ => {}
         }
         return;
     }
     match &ev.logical_key {
+        Key::Named(NamedKey::Escape) if popup => ed.comp_cancel(),
+        Key::Named(NamedKey::Enter) if popup => ed.comp_accept(),
+        Key::Named(NamedKey::Tab) if popup => ed.comp_accept(),
         Key::Named(NamedKey::Escape) => ed.leave_insert(),
         Key::Named(NamedKey::Enter) => {
+            ed.comp_cancel();
             let co = ed.coalesce_open;
             ed.buf_mut().insert_text("\n", co);
         }
-        Key::Named(NamedKey::Backspace) => backspace(ed),
-        Key::Named(NamedKey::Delete) => delete_fwd(ed),
-        Key::Named(NamedKey::Tab) => insert_tab(ed),
-        Key::Character(s) => {
-            if s.chars().next().is_some_and(|c| !c.is_control()) {
+        Key::Named(NamedKey::Backspace) => {
+            ed.comp_cancel();
+            backspace(ed);
+        }
+        Key::Named(NamedKey::Delete) => {
+            ed.comp_cancel();
+            delete_fwd(ed);
+        }
+        Key::Named(NamedKey::Tab) => {
+            ed.comp_cancel();
+            insert_tab(ed);
+        }
+        Key::Character(s)
+            if s.chars().next().is_some_and(|c| !c.is_control()) => {
                 let co = ed.coalesce_open;
                 ed.buf_mut().insert_text(s, co);
+                ed.maybe_completion(s);
             }
-        }
         _ => {}
     }
     ed.buf_mut().clamp();
@@ -531,11 +549,10 @@ fn command_key(ed: &mut Editor, ev: &KeyEvent, mods: ModifiersState) {
             ed.cmdline.pop();
         }
         Key::Character(s) => {
-            if let Some(c) = s.chars().next() {
-                if !c.is_control() {
+            if let Some(c) = s.chars().next()
+                && !c.is_control() {
                     ed.cmdline.push(c);
                 }
-            }
         }
         _ => {}
     }
@@ -562,11 +579,10 @@ fn panel_key(ed: &mut Editor, ev: &KeyEvent, mods: ModifiersState) {
         Key::Named(NamedKey::ArrowDown) => ed.panel_move(1),
         Key::Named(NamedKey::ArrowUp) => ed.panel_move(-1),
         Key::Character(s) => {
-            if let Some(c) = s.chars().next() {
-                if !c.is_control() {
+            if let Some(c) = s.chars().next()
+                && !c.is_control() {
                     ed.panel_type(c);
                 }
-            }
         }
         _ => {}
     }

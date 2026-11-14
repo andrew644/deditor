@@ -162,10 +162,10 @@ fn match_open(text: &[char], i: usize) -> Option<usize> {
         _ => return None,
     };
     let mut depth = 0isize;
-    for j in i..text.len() {
-        if text[j] == open {
+    for (j, &ch) in text.iter().enumerate().skip(i) {
+        if ch == open {
             depth += 1;
-        } else if text[j] == close {
+        } else if ch == close {
             depth -= 1;
             if depth == 0 {
                 return Some(j);
@@ -197,13 +197,6 @@ fn match_close(text: &[char], i: usize) -> Option<usize> {
     None
 }
 
-fn is_open(c: char) -> bool {
-    matches!(c, '(' | '[' | '{')
-}
-
-fn is_close(c: char) -> bool {
-    matches!(c, ')' | ']' | '}')
-}
 
 fn bracket_for(rope: &Rope, line: usize, col: usize, want: char, inner: bool) -> Option<(usize, usize)> {
     let text: Vec<char> = rope
@@ -230,14 +223,12 @@ fn bracket_for(rope: &Rope, line: usize, col: usize, want: char, inner: bool) ->
     if found.is_none() {
         let limit = col.min(text.len().saturating_sub(1));
         for i in (0..=limit).rev() {
-            if text[i] == o {
-                if let Some(j) = match_open(&text, i) {
-                    if j >= col {
+            if text[i] == o
+                && let Some(j) = match_open(&text, i)
+                    && j >= col {
                         found = Some((i, j));
                         break;
                     }
-                }
-            }
         }
     }
     if found.is_none() {
