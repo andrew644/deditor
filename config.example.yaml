@@ -8,6 +8,7 @@ font:
 
 tab_width: 4
 line_numbers: true
+clipboard: true
 
 theme:
   fg: "#d8d8da"

@@ -255,6 +255,11 @@ impl Editor {
                 let s = self.buf().rope.slice(self.buf().offset_of(a)..self.buf().offset_of(b));
                 self.register = s.to_string();
                 self.reg_linewise = linewise;
+                if self.config.clipboard
+                    && let Err(e) = crate::clipboard::set(&self.register)
+                {
+                    self.set_status(format!("Clipboard: {e}"), true);
+                }
             }
             Op::Delete => {
                 self.buf_mut().delete_text(a, b);
@@ -343,12 +348,31 @@ impl Editor {
         }
     }
 
+    fn paste_source(
+        clip: Option<String>,
+        register: &str,
+        register_linewise: bool,
+    ) -> (String, bool) {
+        match clip.filter(|s| !s.is_empty()) {
+            Some(text) => {
+                let linewise = text.ends_with('\n');
+                (text, linewise)
+            }
+            None => (register.to_string(), register_linewise),
+        }
+    }
+
     pub fn paste(&mut self, after: bool) {
-        let reg = self.register.clone();
+        let clip = if self.config.clipboard {
+            crate::clipboard::get().ok()
+        } else {
+            None
+        };
+        let (reg, linewise) = Self::paste_source(clip, &self.register, self.reg_linewise);
         if reg.is_empty() {
             return;
         }
-        if self.reg_linewise {
+        if linewise {
             let mut text = reg.clone();
             if !text.ends_with('\n') {
                 text.push('\n');
@@ -1121,6 +1145,7 @@ mod tests {
     #[test]
     fn yank_line_then_linewise_paste() {
         let mut ed = ed_with("a\nb\n");
+        ed.config.clipboard = false;
         ed.buf_mut().cursor = Pos { line: 0, col: 0 };
         ed.operator_line(mode::Operator::Yank);
         assert_eq!(ed.register, "a\n");
@@ -1128,6 +1153,26 @@ mod tests {
         ed.buf_mut().cursor = Pos { line: 1, col: 0 };
         ed.paste(true);
         assert_eq!(text(&ed), "a\nb\na\n");
+    }
+
+    #[test]
+    fn paste_prefers_the_system_clipboard() {
+        assert_eq!(
+            Editor::paste_source(Some("from elsewhere\n".to_string()), "reg", false),
+            ("from elsewhere\n".to_string(), true)
+        );
+        assert_eq!(
+            Editor::paste_source(Some("inline".to_string()), "reg", true),
+            ("inline".to_string(), false)
+        );
+        assert_eq!(
+            Editor::paste_source(Some(String::new()), "reg", true),
+            ("reg".to_string(), true)
+        );
+        assert_eq!(
+            Editor::paste_source(None, "reg", true),
+            ("reg".to_string(), true)
+        );
     }
 
     #[test]

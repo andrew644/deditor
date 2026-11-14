@@ -73,6 +73,7 @@ pub struct Config {
     pub theme: Theme,
     pub tab_width: u32,
     pub line_numbers: bool,
+    pub clipboard: bool,
 }
 
 impl Default for Config {
@@ -82,6 +83,7 @@ impl Default for Config {
             theme: Theme::default(),
             tab_width: 4,
             line_numbers: true,
+            clipboard: true,
         }
     }
 }
@@ -198,11 +200,12 @@ pub const PALETTE: [&str; 12] = [
     "#f7768e", "#e0af68", "#26262e", "#3f4a5f",
 ];
 
-pub const SETTINGS: [&str; 18] = [
+pub const SETTINGS: [&str; 19] = [
     "font.family",
     "font.size",
     "tab_width",
     "line_numbers",
+    "clipboard",
     "theme.fg",
     "theme.bg",
     "theme.gutter_fg",
@@ -272,6 +275,7 @@ pub fn setting_value(cfg: &Config, key: &str) -> String {
         "font.size" => format!("{}", cfg.font.size),
         "tab_width" => format!("{}", cfg.tab_width),
         "line_numbers" => format!("{}", cfg.line_numbers),
+        "clipboard" => format!("{}", cfg.clipboard),
         k if k.starts_with("theme.") => {
             theme_color(&cfg.theme, &k["theme.".len()..]).unwrap_or("?").to_string()
         }
@@ -288,6 +292,7 @@ pub fn setting_activate(cfg: &mut Config, key: &str) {
         "font.size" => cfg.font.size = next_in(&FONT_SIZES, &cfg.font.size),
         "tab_width" => cfg.tab_width = next_in(&TAB_WIDTHS, &cfg.tab_width),
         "line_numbers" => cfg.line_numbers = !cfg.line_numbers,
+        "clipboard" => cfg.clipboard = !cfg.clipboard,
         k if k.starts_with("theme.") => {
             let name = &k["theme.".len()..];
             let cur = theme_color(&cfg.theme, name).map(|s| s.to_string());
@@ -372,6 +377,10 @@ mod tests {
         assert!(!c.line_numbers);
         setting_activate(&mut c, "line_numbers");
         assert!(c.line_numbers);
+        assert_eq!(setting_value(&c, "clipboard"), "true");
+        setting_activate(&mut c, "clipboard");
+        assert!(!c.clipboard);
+        assert!(SETTINGS.contains(&"clipboard"));
         setting_activate(&mut c, "font.size");
         assert_eq!(c.font.size, 16.0);
         setting_activate(&mut c, "theme.accent");

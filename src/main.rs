@@ -10,6 +10,7 @@ use winit::window::Window;
 
 mod app;
 mod buffer;
+mod clipboard;
 mod fuzzy;
 mod lsp;
 mod motions;
