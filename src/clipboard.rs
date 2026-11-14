@@ -13,7 +13,6 @@ pub fn set(text: &str) -> crate::Result<()> {
         return Ok(());
     }
     let mut child = Command::new("wl-copy")
-        .arg("--foreground")
         .stdin(Stdio::piped())
         .spawn()
         .map_err(|e| format!("wl-copy: {e}"))?;
