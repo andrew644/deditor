@@ -3,6 +3,8 @@ use crate::config::{Config, RgbTheme};
 use crate::mode::{self, Mode};
 use std::path::Path;
 
+const SCROLLOFF: usize = 8;
+
 pub struct Editor {
     pub buffers: Vec<Buffer>,
     pub active: usize,
@@ -165,11 +167,15 @@ impl Editor {
         if rows == 0 {
             return;
         }
-        if b.cursor.line < b.view_top {
-            b.view_top = b.cursor.line;
-        } else if b.cursor.line >= b.view_top + rows {
-            b.view_top = b.cursor.line - rows + 1;
+        let off = SCROLLOFF.min((rows - 1) / 2);
+        let max_top = b.rope.len_lines().saturating_sub(rows);
+        let mut top = b.view_top.min(max_top);
+        if b.cursor.line < top + off {
+            top = b.cursor.line.saturating_sub(off);
+        } else if b.cursor.line > top + rows - 1 - off {
+            top = (b.cursor.line + off + 1).saturating_sub(rows);
         }
+        b.view_top = top.min(max_top);
     }
 
 
@@ -1234,6 +1240,39 @@ mod tests {
         ed.cmdline = "BETA".to_string();
         ed.commit_search(false);
         assert_eq!(ed.buf().cursor, Pos { line: 0, col: 6 });
+    }
+
+    #[test]
+    fn scrolling_keeps_eight_lines_of_context() {
+        let mut ed = ed_with(&"x\n".repeat(100));
+        let rows = 24;
+        ed.buf_mut().view_top = 0;
+        ed.buf_mut().cursor = Pos { line: 20, col: 0 };
+        ed.scroll_to_cursor(rows);
+        assert_eq!(ed.buf().view_top, 5);
+        ed.buf_mut().cursor = Pos { line: 6, col: 0 };
+        ed.scroll_to_cursor(rows);
+        assert_eq!(ed.buf().view_top, 0);
+        ed.buf_mut().cursor = Pos { line: 90, col: 0 };
+        ed.scroll_to_cursor(rows);
+        assert_eq!(ed.buf().view_top, 75);
+        ed.buf_mut().cursor = Pos { line: 84, col: 0 };
+        ed.scroll_to_cursor(rows);
+        assert_eq!(ed.buf().view_top, 75);
+    }
+
+    #[test]
+    fn scrolloff_yields_at_the_ends_of_the_buffer() {
+        let mut ed = ed_with(&"x\n".repeat(20));
+        ed.buf_mut().view_top = 15;
+        ed.buf_mut().cursor = Pos { line: 19, col: 0 };
+        ed.scroll_to_cursor(24);
+        assert_eq!(ed.buf().view_top, 0);
+
+        let mut tiny = ed_with(&"x\n".repeat(4));
+        tiny.buf_mut().cursor = Pos { line: 3, col: 0 };
+        tiny.scroll_to_cursor(3);
+        assert_eq!(tiny.buf().view_top, 2);
     }
 
     #[test]
