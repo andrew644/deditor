@@ -144,6 +144,8 @@ fn normal_key(ed: &mut Editor, key: &Key, mods: ModifiersState) {
             ed.pending = Pending::None;
             match k {
                 Some("g") => ed.run_motion(Motion::GG, count),
+                Some("j") => ed.run_motion(Motion::J, count),
+                Some("k") => ed.run_motion(Motion::K, count),
                 Some("e") => ed.run_motion(Motion::GE, count),
                 Some("E") => ed.run_motion(Motion::BigGE, count),
                 Some("d") => ed.goto_definition_cur(),
@@ -203,7 +205,12 @@ fn normal_key(ed: &mut Editor, key: &Key, mods: ModifiersState) {
                     ed.operator_line(op);
                 }
                 Some(m) => {
-                    if let Some(mo) = motion_of(m) {
+                    let mo = match m {
+                        "j" => Some(Motion::LineDown),
+                        "k" => Some(Motion::LineUp),
+                        _ => motion_of(m),
+                    };
+                    if let Some(mo) = mo {
                         ed.operator_motion(op, mo, count);
                     }
                 }
@@ -333,7 +340,12 @@ fn visual_key(ed: &mut Editor, k: &str, count: u32) {
         }
         "h" | "j" | "k" | "l" | "w" | "W" | "b" | "B" | "e" | "E" | "0" | "^" | "$"
         | "%" => {
-            ed.run_motion(motion_of(k).unwrap(), count);
+            let m = match (ed.visual_linewise, motion_of(k).unwrap()) {
+                (true, Motion::J) => Motion::LineDown,
+                (true, Motion::K) => Motion::LineUp,
+                (_, other) => other,
+            };
+            ed.run_motion(m, count);
         }
         "G" => ed.run_motion(Motion::G, count),
         "i" => ed.pending = Pending::TextObj { op: Operator::Change, inner: true },

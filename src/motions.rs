@@ -32,10 +32,32 @@ pub enum Motion {
     // panel in the default keymap.
     #[allow(dead_code)]
     PageUp,
+    /// Linewise counterpart of `J`, used by operators and linewise visual:
+    /// `J`/`K` move by screen rows once lines wrap.
+    LineDown,
+    LineUp,
 }
 
 pub fn char_is_word(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
+}
+
+pub struct Ctx {
+    pub rows: usize,
+    pub wrap: crate::wrap::Wrap,
+    /// Cell column vertical motions try to keep, Vim's preferred column.
+    pub prefer_x: usize,
+}
+
+impl Ctx {
+    #[cfg(test)]
+    pub fn plain(rows: usize) -> Self {
+        Self {
+            rows,
+            wrap: crate::wrap::Wrap::new(usize::MAX / 4, 4),
+            prefer_x: 0,
+        }
+    }
 }
 
 fn clamp(rope: &Rope, line: usize, col: usize) -> Pos {
@@ -44,7 +66,7 @@ fn clamp(rope: &Rope, line: usize, col: usize) -> Pos {
     Pos { line, col }
 }
 
-pub fn apply(rope: &Rope, pos: Pos, m: Motion, count: u32, _view_top: usize, rows: usize) -> Pos {
+pub fn apply(rope: &Rope, pos: Pos, m: Motion, count: u32, ctx: &Ctx) -> Pos {
     if rope.len_lines() == 0 {
         return pos;
     }
@@ -52,13 +74,18 @@ pub fn apply(rope: &Rope, pos: Pos, m: Motion, count: u32, _view_top: usize, row
     let last = rope.len_lines() - 1;
     match m {
         Motion::H => clamp(rope, pos.line, pos.col.saturating_sub(n)),
+        Motion::J | Motion::K => {
+            let delta = if m == Motion::J { n as i64 } else { -(n as i64) };
+            let (line, sub) = ctx.wrap.shift(rope, pos, delta);
+            clamp(rope, line, ctx.wrap.col_at(rope, line, sub, ctx.prefer_x))
+        }
+        Motion::LineDown => clamp(rope, pos.line + n, pos.col),
+        Motion::LineUp => clamp(rope, pos.line.saturating_sub(n), pos.col),
         Motion::L => {
             let len = line_chars(rope, pos.line);
             let max = len.saturating_sub(1);
             clamp(rope, pos.line, (pos.col + n).min(max))
         }
-        Motion::J => clamp(rope, pos.line + n, pos.col),
-        Motion::K => clamp(rope, pos.line.saturating_sub(n), pos.col),
         Motion::Zero => Pos { line: pos.line, col: 0 },
         Motion::Caret => Pos { line: pos.line, col: first_non_blank(rope, pos.line) },
         Motion::Dollar => {
@@ -82,10 +109,12 @@ pub fn apply(rope: &Rope, pos: Pos, m: Motion, count: u32, _view_top: usize, row
             .map(|p| clamp(rope, p.line, p.col + 1))
             .unwrap_or(pos),
         Motion::Percent => percent(rope, pos),
-        Motion::HalfPageDown => clamp(rope, pos.line + n * (rows / 2).max(1), pos.col),
-        Motion::HalfPageUp => clamp(rope, pos.line.saturating_sub(n * (rows / 2).max(1)), pos.col),
-        Motion::PageDown => clamp(rope, pos.line + n * rows.max(1), pos.col),
-        Motion::PageUp => clamp(rope, pos.line.saturating_sub(n * rows.max(1)), pos.col),
+        Motion::HalfPageDown => clamp(rope, pos.line + n * (ctx.rows / 2).max(1), pos.col),
+        Motion::HalfPageUp => {
+            clamp(rope, pos.line.saturating_sub(n * (ctx.rows / 2).max(1)), pos.col)
+        }
+        Motion::PageDown => clamp(rope, pos.line + n * ctx.rows.max(1), pos.col),
+        Motion::PageUp => clamp(rope, pos.line.saturating_sub(n * ctx.rows.max(1)), pos.col),
     }
 }
 
@@ -427,7 +456,9 @@ mod tests {
     }
 
     fn m(rope: &Rope, p: Pos, motion: Motion) -> Pos {
-        apply(rope, p, motion, 1, 0, 20)
+        let mut ctx = Ctx::plain(20);
+        ctx.prefer_x = p.col;
+        apply(rope, p, motion, 1, &ctx)
     }
 
     #[test]
@@ -439,7 +470,7 @@ mod tests {
     #[test]
     fn w_three_on_words() {
         let r = rope("a b c d");
-        assert_eq!(apply(&r, at(0, 0), Motion::W, 3, 0, 20), at(0, 6));
+        assert_eq!(apply(&r, at(0, 0), Motion::W, 3, &Ctx::plain(20)), at(0, 6));
     }
 
     #[test]
@@ -488,7 +519,7 @@ mod tests {
         let r = rope("one\ntwo\nthree");
         assert_eq!(m(&r, at(2, 3), Motion::GG), at(0, 3));
         assert_eq!(m(&r, at(0, 1), Motion::G), at(2, 1));
-        assert_eq!(apply(&r, at(0, 0), Motion::G, 99, 0, 20), at(2, 0));
+        assert_eq!(apply(&r, at(0, 0), Motion::G, 99, &Ctx::plain(20)), at(2, 0));
     }
 
     #[test]
@@ -498,7 +529,7 @@ mod tests {
         assert_eq!(m(&r, at(0, 0), Motion::H), at(0, 0));
         assert_eq!(m(&r, at(0, 1), Motion::J), at(1, 1));
         assert_eq!(m(&r, at(0, 0), Motion::K), at(0, 0));
-        assert_eq!(apply(&r, at(0, 0), Motion::J, 50, 0, 20), at(1, 0));
+        assert_eq!(apply(&r, at(0, 0), Motion::J, 50, &Ctx::plain(20)), at(1, 0));
         assert_eq!(m(&r, at(1, 0), Motion::Zero), at(1, 0));
         assert_eq!(m(&r, at(0, 1), Motion::Dollar), at(0, 1));
     }
@@ -513,7 +544,10 @@ mod tests {
     fn find_forward_and_till() {
         let r = rope("xaxbx");
         assert_eq!(m(&r, at(0, 0), Motion::Fwd('x')), at(0, 2));
-        assert_eq!(apply(&r, at(0, 0), Motion::Fwd('x'), 2, 0, 20), at(0, 4));
+        assert_eq!(
+            apply(&r, at(0, 0), Motion::Fwd('x'), 2, &Ctx::plain(20)),
+            at(0, 4)
+        );
         assert_eq!(m(&r, at(0, 0), Motion::TillFwd('x')), at(0, 1));
         assert_eq!(m(&r, at(0, 0), Motion::Fwd('z')), at(0, 0));
         assert_eq!(m(&r, at(0, 0), Motion::TillFwd('z')), at(0, 0));
@@ -541,10 +575,13 @@ mod tests {
         let text = "l\n".repeat(30);
         let text = text.trim_end();
         let r = rope(text);
-        assert_eq!(apply(&r, at(0, 0), Motion::PageDown, 1, 0, 10), at(10, 0));
-        assert_eq!(apply(&r, at(0, 0), Motion::HalfPageDown, 1, 0, 10), at(5, 0));
-        assert_eq!(apply(&r, at(0, 0), Motion::PageUp, 1, 0, 10), at(0, 0));
-        assert_eq!(apply(&r, at(29, 0), Motion::PageDown, 1, 0, 10), at(29, 0));
+        assert_eq!(apply(&r, at(0, 0), Motion::PageDown, 1, &Ctx::plain(10)), at(10, 0));
+        assert_eq!(
+            apply(&r, at(0, 0), Motion::HalfPageDown, 1, &Ctx::plain(10)),
+            at(5, 0)
+        );
+        assert_eq!(apply(&r, at(0, 0), Motion::PageUp, 1, &Ctx::plain(10)), at(0, 0));
+        assert_eq!(apply(&r, at(29, 0), Motion::PageDown, 1, &Ctx::plain(10)), at(29, 0));
     }
 
     #[test]
@@ -556,5 +593,21 @@ mod tests {
         assert_eq!(m(&r, at(0, 0), Motion::E), at(0, 0));
         assert_eq!(m(&r, at(0, 0), Motion::G), at(0, 0));
         assert_eq!(m(&r, at(0, 0), Motion::GE), at(0, 0));
+    }
+
+    #[test]
+    fn j_and_k_step_screen_rows_and_keep_a_preferred_column() {
+        let r = rope("aaaaaaaaa\nb");
+        let mut ctx = Ctx::plain(20);
+        ctx.wrap = crate::wrap::Wrap::new(3, 4);
+        ctx.prefer_x = 2;
+        assert_eq!(apply(&r, at(0, 0), Motion::J, 1, &ctx), at(0, 5));
+        assert_eq!(apply(&r, at(0, 5), Motion::K, 1, &ctx), at(0, 2));
+        ctx.prefer_x = 0;
+        assert_eq!(apply(&r, at(0, 5), Motion::K, 1, &ctx), at(0, 0));
+        assert_eq!(apply(&r, at(0, 0), Motion::J, 2, &ctx), at(0, 6));
+        assert_eq!(apply(&r, at(0, 8), Motion::J, 1, &ctx), at(1, 0));
+        assert_eq!(apply(&r, at(0, 8), Motion::LineDown, 1, &ctx), at(1, 1));
+        assert_eq!(apply(&r, at(1, 0), Motion::LineUp, 1, &ctx), at(0, 0));
     }
 }

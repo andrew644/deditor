@@ -259,6 +259,9 @@ pub fn draw_content(
     let h = gpu.config.height as f32;
     let theme = &ed.theme;
     let buf = ed.buf();
+    let wrap = ed.wrap();
+    let rows = wrap.screen_rows(&buf.rope, buf.view_top, buf.view_sub, l.rows as usize);
+    let gutter = l.gutter_cols as usize;
     let mut rects: Vec<rects::RectInstance> = Vec::new();
     let mut overlay: Vec<rects::RectInstance> = Vec::new();
     rects.push(rects::RectInstance {
@@ -297,11 +300,13 @@ pub fn draw_content(
         h: ch,
         color: theme.status_bg,
     });
-    let cur_row = buf.cursor.line.saturating_sub(buf.view_top);
-    if buf.cursor.line >= buf.view_top && cur_row < l.rows as usize {
+    let cursor_row = wrap.screen_row(&buf.rope, buf.view_top, buf.view_sub, buf.cursor);
+    if let Some(row) = cursor_row
+        && row < rows.len()
+    {
         rects.push(rects::RectInstance {
             x: 0.0,
-            y: (1 + cur_row) as f32 * ch,
+            y: (1 + row) as f32 * ch,
             w,
             h: ch,
             color: theme.cursorline,
@@ -321,41 +326,42 @@ pub fn draw_content(
         let t: Vec<char> = term.chars().collect();
         let fold = crate::search::ignore_case(&term);
         if !t.is_empty() {
-            for r in 0..(l.rows as usize) {
-                let line = buf.view_top + r;
-                if line >= buf.rope.len_lines() {
+            for (r, scr) in rows.iter().enumerate() {
+                if scr.line >= buf.rope.len_lines() || scr.start >= scr.end {
                     continue;
                 }
-                let raw = crate::buffer::line_text(&buf.rope, line);
+                let raw = crate::buffer::line_text(&buf.rope, scr.line);
                 let chars: Vec<char> = raw.chars().collect();
-                if chars.len() < t.len() {
-                    continue;
-                }
-                for i in 0..=(chars.len() - t.len()) {
-                    if crate::search::matches_at(&chars, &t, i, fold) {
-                        let x = (l.gutter_cols as usize + ed.visual_x(&raw, i)) as f32 * cw;
-                        rects.push(rects::RectInstance {
-                            x,
-                            y: (1 + r) as f32 * ch,
-                            w: t.len() as f32 * cw,
-                            h: ch,
-                            color: theme.warn,
-                        });
+                for i in scr.start..scr.end {
+                    if i + t.len() > chars.len() {
+                        break;
                     }
+                    if !crate::search::matches_at(&chars, &t, i, fold) {
+                        continue;
+                    }
+                    rects.push(rects::RectInstance {
+                        x: (gutter + wrap.pos(&raw, i).1) as f32 * cw,
+                        y: (1 + r) as f32 * ch,
+                        w: t.len().min(scr.end - i) as f32 * cw,
+                        h: ch,
+                        color: theme.warn,
+                    });
                 }
             }
         }
     }
     if ed.mode == crate::mode::Mode::Visual {
         let ((sa, sb), lw) = ed.sel_range();
-        for r in 0..(l.rows as usize) {
-            let line = buf.view_top + r;
+        for (r, scr) in rows.iter().enumerate() {
+            let line = scr.line;
+            if line >= buf.rope.len_lines() || scr.start >= scr.end {
+                continue;
+            }
             if line < sa.line || line > sb.line {
                 continue;
             }
             let raw = crate::buffer::line_text(&buf.rope, line);
-            let gcol = l.gutter_cols as usize;
-            let range: (usize, usize) = if lw {
+            let (from, to) = if lw {
                 let last = if sb.col == 0 {
                     sb.line.saturating_sub(1)
                 } else {
@@ -364,27 +370,29 @@ pub fn draw_content(
                 if line > last {
                     continue;
                 }
-                (0, usize::MAX)
+                (scr.start, usize::MAX)
             } else if sa.line == sb.line {
-                (
-                    ed.visual_x(&raw, sa.col),
-                    ed.visual_x(&raw, sb.col).max(ed.visual_x(&raw, sa.col) + 1),
-                )
+                (sa.col, sb.col + 1)
             } else if line == sa.line {
-                (ed.visual_x(&raw, sa.col), usize::MAX)
+                (sa.col, usize::MAX)
             } else if line == sb.line {
                 if sb.col == 0 {
                     continue;
                 }
-                (0, ed.visual_x(&raw, sb.col))
+                (scr.start, sb.col)
             } else {
-                (0, usize::MAX)
+                (scr.start, usize::MAX)
             };
-            let x = (gcol + range.0) as f32 * cw;
-            let width = if range.1 == usize::MAX {
+            let a = from.max(scr.start);
+            if a >= scr.end {
+                continue;
+            }
+            let x = (gutter + wrap.pos(&raw, a).1) as f32 * cw;
+            let width = if to == usize::MAX {
                 w - x
             } else {
-                (gcol + range.1) as f32 * cw - x
+                let b = to.min(scr.end).max(a + 1);
+                (gutter + wrap.pos(&raw, b).1) as f32 * cw - x
             };
             if width <= 0.0 {
                 continue;
@@ -398,14 +406,14 @@ pub fn draw_content(
             });
         }
     }
-    let vt = buf.view_top;
     let cur_line = crate::buffer::line_text(&buf.rope, buf.cursor.line);
-    let cur_x = (l.gutter_cols as usize + ed.visual_x(&cur_line, buf.cursor.col)) as f32 * cw;
-    let cur_y = (1 + buf.cursor.line.saturating_sub(vt)) as f32 * ch;
-    if buf.cursor.line >= vt && buf.cursor.line < vt + l.rows as usize {
+    let cur_x = (gutter + wrap.pos(&cur_line, buf.cursor.col).1) as f32 * cw;
+    if let Some(row) = cursor_row
+        && row < rows.len()
+    {
         rects.push(rects::RectInstance {
             x: cur_x,
-            y: cur_y,
+            y: (1 + row) as f32 * ch,
             w: if ed.mode == crate::mode::Mode::Insert {
                 2.0
             } else {
@@ -415,29 +423,25 @@ pub fn draw_content(
             color: theme.accent,
         });
     }
-    let visible = l.rows as usize;
-    let body_cols = l.cols.saturating_sub(l.gutter_cols) as usize;
     let mut gutter_s = String::new();
     let mut body_s = String::new();
-    for r in 0..visible {
-        let line = vt + r;
-        if line < buf.rope.len_lines() {
+    for (r, row) in rows.iter().enumerate() {
+        if row.line < buf.rope.len_lines() {
             if l.gutter_cols > 0 {
-                gutter_s.push_str(&format!(
-                    "{:>w$} ",
-                    line + 1,
-                    w = l.gutter_cols as usize - 1
-                ));
+                if row.first() {
+                    gutter_s.push_str(&format!(
+                        "{:>w$} ",
+                        row.line + 1,
+                        w = gutter.saturating_sub(1)
+                    ));
+                } else {
+                    gutter_s.push_str(&" ".repeat(gutter));
+                }
             }
-            let raw = crate::buffer::line_text(&buf.rope, line);
-            let shown: String = ed
-                .expand_tabs(&raw, usize::MAX)
-                .chars()
-                .take(body_cols)
-                .collect();
-            body_s.push_str(&shown);
+            let raw = crate::buffer::line_text(&buf.rope, row.line);
+            body_s.push_str(&wrap.text(&raw, row.start, row.end));
         }
-        if r + 1 < visible {
+        if r + 1 < rows.len() {
             gutter_s.push('\n');
             body_s.push('\n');
         }
@@ -500,10 +504,18 @@ pub fn draw_content(
         theme.fg
     };
     for d in diags {
-        if d.line < ed.buf().view_top || d.line - ed.buf().view_top >= l.rows as usize {
+        let Some(row) = wrap.screen_row(
+            &buf.rope,
+            buf.view_top,
+            buf.view_sub,
+            crate::buffer::Pos { line: d.line, col: 0 },
+        ) else {
+            continue;
+        };
+        if row >= rows.len() {
             continue;
         }
-        let y = (1 + d.line - ed.buf().view_top) as f32 * ch;
+        let y = (1 + row) as f32 * ch;
         rects.push(rects::RectInstance {
             x: 0.0,
             y,
@@ -532,7 +544,7 @@ pub fn draw_content(
     let mut hover_pos = None;
     if hover_open {
         let nrows = hover_s.lines().count() as f32;
-        let row = (1 + ed.buf().cursor.line.saturating_sub(ed.buf().view_top)) as f32;
+        let row = 1.0 + cursor_row.unwrap_or(0) as f32;
         let hw = hover_cols as f32 * cw;
         let hx = (l.gutter_cols as f32 * cw + 10.0 * cw).min(w - hw);
         let hy = (row * ch + ch).min(h - (nrows + 1.0) * ch);
@@ -570,7 +582,14 @@ pub fn draw_content(
             comp_s.push_str(&format!("{:<38.38}", it.text));
         }
         let nrows = comp_s.lines().count() as f32;
-        let row = (1 + cs.line.saturating_sub(ed.buf().view_top)) as f32;
+        let row = 1.0
+            + wrap.screen_row(
+                &buf.rope,
+                buf.view_top,
+                buf.view_sub,
+                crate::buffer::Pos { line: cs.line, col: 0 },
+            )
+            .unwrap_or(0) as f32;
         let cwid = 42.0f32 * cw;
         let cx = ((l.gutter_cols as f32 + cs.col as f32) * cw).min(w - cwid);
         let cy = ((row + 1.0) * ch).min(h - nrows * ch);

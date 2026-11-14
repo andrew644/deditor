@@ -20,6 +20,7 @@ mod keys;
 mod mode;
 mod render;
 mod search;
+mod wrap;
 
 use app::Editor;
 use render::rects::RectPipeline;
@@ -213,21 +214,20 @@ impl ApplicationHandler for App {
             }
             WindowEvent::Ime(_) => {}
             WindowEvent::MouseWheel { delta, .. } => {
-                if let (Some(ed), Some(ts), Some(gpu)) =
-                    (&mut self.editor, &self.text, &self.gpu)
-                {
+                if let (Some(ed), Some(ts)) = (&mut self.editor, &self.text) {
                     let ch = ts.cell_h.max(1.0);
                     let notches = match delta {
                         MouseScrollDelta::LineDelta(_, y) => y as f64,
                         MouseScrollDelta::PixelDelta(pos) => pos.y / ch as f64,
                     };
-                    let rows =
-                        (gpu.config.height as f64 / ch as f64) as i64 - 2;
+                    let (top, sub) = {
+                        let b = ed.buf();
+                        let notches = (notches * 3.0).round() as i64;
+                        ed.wrap().scroll(&b.rope, b.view_top, b.view_sub, -notches)
+                    };
                     let b = ed.buf_mut();
-                    let max_top = b.rope.len_lines().saturating_sub(1);
-                    let nt = b.view_top as i64 - (notches * 3.0).round() as i64;
-                    b.view_top = nt.clamp(0, max_top as i64) as usize;
-                    let _ = rows;
+                    b.view_top = top;
+                    b.view_sub = sub;
                     if let Some(w) = &self.window {
                         w.request_redraw();
                     }
@@ -307,11 +307,15 @@ impl App {
             return;
         };
         let l = render::Layout::new(gpu, ts, ed);
+        let wrap = ed.wrap();
         let b = ed.buf();
         let line = buffer::line_text(&b.rope, b.cursor.line);
-        let x = (l.gutter_cols as usize + ed.visual_x(&line, b.cursor.col)) as f64
+        let row = wrap
+            .screen_row(&b.rope, b.view_top, b.view_sub, b.cursor)
+            .unwrap_or(0);
+        let x = (l.gutter_cols as usize + wrap.pos(&line, b.cursor.col).1) as f64
             * ts.cell_w as f64;
-        let y = (1 + b.cursor.line.saturating_sub(b.view_top)) as f64 * ts.cell_h as f64;
+        let y = (1 + row) as f64 * ts.cell_h as f64;
         w.set_ime_cursor_area(
             PhysicalPosition::new(x, y),
             PhysicalSize::new(ts.cell_w as u32 * 4, ts.cell_h as u32),
@@ -368,11 +372,14 @@ impl App {
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
-        let rows = (gpu.config.height as f32 / text.cell_h.max(1.0)) as usize;
-        ed.view_rows = rows.saturating_sub(2);
+        let grid = render::Layout::new(gpu, text, ed);
+        ed.view_rows = grid.rows as usize;
+        ed.view_cols = (grid.cols as usize)
+            .saturating_sub(grid.gutter_cols as usize)
+            .max(1);
         ed.poll_files();
         ed.poll_lsp();
-        ed.scroll_to_cursor(rows.saturating_sub(2));
+        ed.scroll_to_cursor(grid.rows as usize);
         let lsp_busy = ed.lsp.busy();
         self.tab_ranges = render::tab_hit_ranges(ed, text.cell_w.max(1.0));
         if lsp_busy

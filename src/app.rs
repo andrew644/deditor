@@ -23,6 +23,8 @@ pub struct Editor {
     pub coalesce_open: bool,
     pub last_find: Option<(mode::FindDir, char)>,
     pub view_rows: usize,
+    pub view_cols: usize,
+    pub prefer_x: Option<usize>,
     pub cmdline: String,
     pub cmd_kind: Option<mode::CmdKind>,
     pub search: Option<String>,
@@ -93,6 +95,8 @@ impl Editor {
             coalesce_open: false,
             last_find: None,
             view_rows: 24,
+            view_cols: 80,
+            prefer_x: None,
             cmdline: String::new(),
             cmd_kind: None,
             search_back: false,
@@ -162,20 +166,78 @@ impl Editor {
         self.status_err = err;
     }
 
+    pub fn wrap(&self) -> crate::wrap::Wrap {
+        crate::wrap::Wrap::new(self.view_cols, self.config.tab_width as usize)
+    }
+
     pub fn scroll_to_cursor(&mut self, rows: usize) {
-        let b = self.buf_mut();
         if rows == 0 {
             return;
         }
         let off = SCROLLOFF.min((rows - 1) / 2);
-        let max_top = b.rope.len_lines().saturating_sub(rows);
-        let mut top = b.view_top.min(max_top);
-        if b.cursor.line < top + off {
-            top = b.cursor.line.saturating_sub(off);
-        } else if b.cursor.line > top + rows - 1 - off {
-            top = (b.cursor.line + off + 1).saturating_sub(rows);
+        let wrap = self.wrap();
+        let last = self.buf().rope.len_lines().saturating_sub(1);
+        let rows_at = |line: usize| {
+            wrap.row_count(&crate::buffer::line_text(&self.buf().rope, line))
+        };
+        let cursor = self.buf().cursor;
+        let mut top = self.buf().view_top.min(last);
+        let mut sub = self.buf().view_sub;
+        loop {
+            let top_rows = rows_at(top);
+            if sub >= top_rows {
+                sub = top_rows - 1;
+            }
+            let rel = wrap.screen_row(&self.buf().rope, top, sub, cursor);
+            let too_high = cursor.line < top || rel.is_some_and(|r| r < off);
+            let too_low = rel.is_some_and(|r| r > rows - 1 - off);
+            if too_high {
+                if sub > 0 {
+                    sub -= 1;
+                } else if top > 0 {
+                    top -= 1;
+                    sub = rows_at(top) - 1;
+                } else {
+                    break;
+                }
+                continue;
+            }
+            if too_low {
+                if top == cursor.line || sub + 1 < rows_at(top) {
+                    sub += 1;
+                } else {
+                    top += 1;
+                    sub = 0;
+                }
+                continue;
+            }
+            break;
         }
-        b.view_top = top.min(max_top);
+        loop {
+            let mut used = 0usize;
+            let mut line = top;
+            let mut walked = sub;
+            loop {
+                used += rows_at(line) - walked;
+                walked = 0;
+                if used >= rows || line >= last {
+                    break;
+                }
+                line += 1;
+            }
+            if used >= rows || top == 0 {
+                break;
+            }
+            if sub > 0 {
+                sub -= 1;
+            } else {
+                top -= 1;
+                sub = rows_at(top) - 1;
+            }
+        }
+        let b = self.buf_mut();
+        b.view_top = top;
+        b.view_sub = sub;
     }
 
 
@@ -527,12 +589,31 @@ impl Editor {
         };
     }
 
+    fn motion_ctx(&self, vertical: bool) -> crate::motions::Ctx {
+        let wrap = self.wrap();
+        let b = self.buf();
+        let text = crate::buffer::line_text(&b.rope, b.cursor.line);
+        let here = wrap.pos(&text, b.cursor.col).1;
+        crate::motions::Ctx {
+            rows: self.view_rows,
+            wrap,
+            prefer_x: if vertical {
+                self.prefer_x.unwrap_or(here)
+            } else {
+                here
+            },
+        }
+    }
+
     pub fn run_motion(&mut self, m: crate::motions::Motion, count: u32) {
-        let rows = self.view_rows;
+        use crate::motions::Motion as M;
+        let vertical = matches!(m, M::J | M::K);
+        let ctx = self.motion_ctx(vertical);
         let to = {
             let b = self.buf();
-            crate::motions::apply(&b.rope, b.cursor, m, count, b.view_top, rows)
+            crate::motions::apply(&b.rope, b.cursor, m, count, &ctx)
         };
+        self.prefer_x = vertical.then_some(ctx.prefer_x);
         self.buf_mut().cursor = to;
         self.buf_mut().clamp();
     }
@@ -550,12 +631,13 @@ impl Editor {
 
     pub fn operator_motion(&mut self, op: mode::Operator, m: crate::motions::Motion, count: u32) {
         use crate::motions::Motion as M;
-        let rows = self.view_rows;
+        let ctx = self.motion_ctx(false);
         let (from, to) = {
             let b = self.buf();
-            (b.cursor, crate::motions::apply(&b.rope, b.cursor, m, count, b.view_top, rows))
+            (b.cursor, crate::motions::apply(&b.rope, b.cursor, m, count, &ctx))
         };
-        let linewise = matches!(m, M::J | M::K | M::GG | M::G);
+        self.prefer_x = None;
+        let linewise = matches!(m, M::LineDown | M::LineUp | M::GG | M::G);
         if from == to && !linewise {
             self.clear_pending();
             return;
@@ -1427,5 +1509,37 @@ mod tests {
         ed.execute_cmdline();
         assert!(ed.status_err);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn vertical_motion_keeps_its_column_across_wraps() {
+        let mut ed = ed_with("abcdefghij\nsecond");
+        ed.view_cols = 5;
+        ed.buf_mut().cursor = Pos { line: 0, col: 7 };
+        ed.run_motion(Motion::J, 1);
+        assert_eq!(ed.buf().cursor, Pos { line: 1, col: 2 });
+        ed.run_motion(Motion::K, 1);
+        assert_eq!(ed.buf().cursor, Pos { line: 0, col: 7 });
+        ed.run_motion(Motion::Zero, 1);
+        ed.run_motion(Motion::J, 1);
+        assert_eq!(ed.buf().cursor, Pos { line: 0, col: 5 });
+        ed.run_motion(Motion::J, 1);
+        assert_eq!(ed.buf().cursor, Pos { line: 1, col: 0 });
+    }
+
+    #[test]
+    fn scrolling_follows_the_cursor_through_a_wrapped_line() {
+        let long = "x".repeat(40);
+        let mut ed = ed_with(&format!("{long}\nend"));
+        ed.view_cols = 10;
+        ed.buf_mut().cursor = Pos { line: 0, col: 39 };
+        ed.scroll_to_cursor(4);
+        let b = ed.buf();
+        assert_eq!(b.view_top, 0);
+        assert_eq!(b.view_sub, 1);
+        assert_eq!(
+            ed.wrap().screen_row(&b.rope, b.view_top, b.view_sub, b.cursor),
+            Some(2)
+        );
     }
 }
