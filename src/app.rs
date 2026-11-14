@@ -68,25 +68,6 @@ pub fn parse_cmd(s: &str) -> Result<Cmd, String> {
     }
 }
 
-fn find_wrap(chars: &[char], t: &[char], start: usize, back: bool) -> Option<usize> {
-    let n = chars.len();
-    let tl = t.len();
-    if tl == 0 || n < tl {
-        return None;
-    }
-    let hit = |i: usize| chars[i..i + tl] == t[..];
-    if back {
-        let hi = start.min(n - tl);
-        (0..=hi).rev().find(|&i| hit(i)).or_else(|| ((hi + 1)..=(n - tl)).rev().find(|&i| hit(i)))
-    } else {
-        let lo = start.min(n - tl + 1);
-        if lo <= n - tl
-            && let Some(i) = (lo..=(n - tl)).find(|&i| hit(i)) {
-                return Some(i);
-            }
-        (0..lo.min(n - tl + 1)).find(|&i| hit(i))
-    }
-}
 impl Editor {
     pub fn new(path: Option<&Path>) -> Self {
         let (config, mut warnings) = crate::config::load();
@@ -624,7 +605,8 @@ impl Editor {
             } else {
                 off + 1
             };
-            find_wrap(&chars, &t, start, back)
+            let fold = crate::search::ignore_case(term);
+            crate::search::find_wrap(&chars, &t, start, back, fold)
         };
         match found {
             Some(i) => {
@@ -1189,6 +1171,28 @@ mod tests {
         assert_eq!(ed.buf().cursor, Pos { line: 0, col: 4 });
         ed.repeat_search(true);
         assert_eq!(ed.buf().cursor, Pos { line: 0, col: 12 });
+    }
+
+    #[test]
+    fn search_case_follows_the_term_casing() {
+        let mut ed = ed_with("alpha BETA gamma");
+        ed.buf_mut().cursor = Pos { line: 0, col: 0 };
+        ed.open_cmdline(crate::mode::CmdKind::Search);
+        ed.cmdline = "beta".to_string();
+        ed.commit_search(false);
+        assert_eq!(ed.buf().cursor, Pos { line: 0, col: 6 });
+        ed.repeat_search(false);
+        assert_eq!(ed.buf().cursor, Pos { line: 0, col: 6 });
+        ed.open_cmdline(crate::mode::CmdKind::Search);
+        ed.cmdline = "Beta".to_string();
+        ed.commit_search(false);
+        assert!(ed.status_err);
+        assert_eq!(ed.status.as_deref(), Some("Pattern not found: Beta"));
+        assert_eq!(ed.buf().cursor, Pos { line: 0, col: 6 });
+        ed.open_cmdline(crate::mode::CmdKind::Search);
+        ed.cmdline = "BETA".to_string();
+        ed.commit_search(false);
+        assert_eq!(ed.buf().cursor, Pos { line: 0, col: 6 });
     }
 
     #[test]

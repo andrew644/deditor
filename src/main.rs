@@ -18,6 +18,7 @@ mod config;
 mod keys;
 mod mode;
 mod render;
+mod search;
 
 use app::Editor;
 use render::rects::RectPipeline;

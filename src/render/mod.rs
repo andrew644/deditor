@@ -309,6 +309,7 @@ pub fn draw_content(
     };
     if let Some(term) = hi_term {
         let t: Vec<char> = term.chars().collect();
+        let fold = crate::search::ignore_case(&term);
         if !t.is_empty() {
             for r in 0..(l.rows as usize) {
                 let line = buf.view_top + r;
@@ -321,7 +322,7 @@ pub fn draw_content(
                     continue;
                 }
                 for i in 0..=(chars.len() - t.len()) {
-                    if chars[i..i + t.len()] == t[..] {
+                    if crate::search::matches_at(&chars, &t, i, fold) {
                         let x = (l.gutter_cols as usize + ed.visual_x(&raw, i)) as f32 * cw;
                         rects.push(rects::RectInstance {
                             x,
