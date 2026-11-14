@@ -297,6 +297,16 @@ pub fn draw_content(
         h: ch,
         color: theme.status_bg,
     });
+    let cur_row = buf.cursor.line.saturating_sub(buf.view_top);
+    if buf.cursor.line >= buf.view_top && cur_row < l.rows as usize {
+        rects.push(rects::RectInstance {
+            x: 0.0,
+            y: (1 + cur_row) as f32 * ch,
+            w,
+            h: ch,
+            color: theme.cursorline,
+        });
+    }
     let hi_term: Option<String> = match ed.cmd_kind {
         Some(crate::mode::CmdKind::Search) | Some(crate::mode::CmdKind::SearchBack) => {
             if ed.cmdline.is_empty() {

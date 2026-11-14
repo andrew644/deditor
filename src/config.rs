@@ -17,6 +17,7 @@ pub struct Theme {
     pub bg: String,
     pub gutter_fg: String,
     pub selection: String,
+    pub cursorline: String,
     pub tab_active: String,
     pub tab_inactive: String,
     pub status_bg: String,
@@ -34,6 +35,7 @@ impl Default for Theme {
             fg: "#d8d8da".into(),
             bg: "#1c1c20".into(),
             gutter_fg: "#6a6a72".into(),
+            cursorline: "#2a2b33".into(),
             selection: "#3a3d4a".into(),
             tab_active: "#2f3240".into(),
             tab_inactive: "#22232a".into(),
@@ -138,6 +140,7 @@ pub struct RgbTheme {
     pub bg: u32,
     pub gutter_fg: u32,
     pub selection: u32,
+    pub cursorline: u32,
     pub tab_active: u32,
     pub tab_inactive: u32,
     pub status_bg: u32,
@@ -166,6 +169,7 @@ impl RgbTheme {
             fg: hex_checked(&t.fg, "fg", 0xFFD8D8DA, &mut w),
             bg: hex_checked(&t.bg, "bg", 0xFF1C1C20, &mut w),
             gutter_fg: hex_checked(&t.gutter_fg, "gutter_fg", 0xFF6A6A72, &mut w),
+            cursorline: hex_checked(&t.cursorline, "cursorline", 0xFF2A2B33, &mut w),
             selection: hex_checked(&t.selection, "selection", 0xFF3A3D4A, &mut w),
             tab_active: hex_checked(&t.tab_active, "tab_active", 0xFF2F3240, &mut w),
             tab_inactive: hex_checked(&t.tab_inactive, "tab_inactive", 0xFF22232A, &mut w),
@@ -194,7 +198,7 @@ pub const PALETTE: [&str; 12] = [
     "#f7768e", "#e0af68", "#26262e", "#3f4a5f",
 ];
 
-pub const SETTINGS: [&str; 17] = [
+pub const SETTINGS: [&str; 18] = [
     "font.family",
     "font.size",
     "tab_width",
@@ -203,6 +207,7 @@ pub const SETTINGS: [&str; 17] = [
     "theme.bg",
     "theme.gutter_fg",
     "theme.selection",
+    "theme.cursorline",
     "theme.tab_active",
     "theme.tab_inactive",
     "theme.status_bg",
@@ -220,6 +225,7 @@ pub fn theme_color<'a>(t: &'a Theme, name: &str) -> Option<&'a str> {
         "bg" => &t.bg,
         "gutter_fg" => &t.gutter_fg,
         "selection" => &t.selection,
+        "cursorline" => &t.cursorline,
         "tab_active" => &t.tab_active,
         "tab_inactive" => &t.tab_inactive,
         "status_bg" => &t.status_bg,
@@ -239,6 +245,7 @@ pub fn theme_color_mut<'a>(t: &'a mut Theme, name: &str) -> Option<&'a mut Strin
         "bg" => &mut t.bg,
         "gutter_fg" => &mut t.gutter_fg,
         "selection" => &mut t.selection,
+        "cursorline" => &mut t.cursorline,
         "tab_active" => &mut t.tab_active,
         "tab_inactive" => &mut t.tab_inactive,
         "status_bg" => &mut t.status_bg,
@@ -319,6 +326,29 @@ mod tests {
         assert_eq!(rgb.fg, 0xFFD8D8DA);
         assert_eq!(w.len(), 1);
         assert!(w[0].contains("theme.fg"));
+    }
+
+    #[test]
+    fn cursorline_is_editable_and_checked() {
+        let mut c = Config::default();
+        assert_eq!(setting_value(&c, "theme.cursorline"), "#2a2b33");
+        assert!(SETTINGS.contains(&"theme.cursorline"));
+        setting_activate(&mut c, "theme.cursorline");
+        assert_ne!(c.theme.cursorline, Theme::default().cursorline);
+        let (rgb, w) = RgbTheme::from_theme_checked(&c.theme);
+        assert!(w.is_empty());
+        assert_eq!(
+            rgb.cursorline,
+            parse_hex(&c.theme.cursorline).unwrap_or_default()
+        );
+        let bad = Theme {
+            cursorline: "not-a-color".into(),
+            ..Theme::default()
+        };
+        let (rgb, w) = RgbTheme::from_theme_checked(&bad);
+        assert_eq!(rgb.cursorline, 0xFF2A2B33);
+        assert_eq!(w.len(), 1);
+        assert!(w[0].contains("theme.cursorline"));
     }
 
     #[test]

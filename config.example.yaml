@@ -14,6 +14,7 @@ theme:
   bg: "#1c1c20"
   gutter_fg: "#6a6a72"
   selection: "#3a3d4a"
+  cursorline: "#2a2b33"
   tab_active: "#2f3240"
   tab_inactive: "#22232a"
   status_bg: "#2a2b33"
