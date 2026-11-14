@@ -1,0 +1,25 @@
+# deditor configuration
+# Copy to ~/.config/deditor/config.yaml and edit.
+# All keys are optional; anything missing falls back to the default shown here.
+
+font:
+  family: monospace
+  size: 14.0
+
+tab_width: 4
+line_numbers: true
+
+theme:
+  fg: "#d8d8da"
+  bg: "#1c1c20"
+  gutter_fg: "#6a6a72"
+  selection: "#3a3d4a"
+  tab_active: "#2f3240"
+  tab_inactive: "#22232a"
+  status_bg: "#2a2b33"
+  accent: "#7aa2f7"
+  error: "#f7768e"
+  warn: "#e0af68"
+  popup_bg: "#26262e"
+  popup_fg: "#d8d8da"
+  popup_sel: "#3f4a5f"

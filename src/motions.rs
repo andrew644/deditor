@@ -1,0 +1,557 @@
+use crate::buffer::{Pos, line_chars, line_text};
+use ropey::Rope;
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Motion {
+    H,
+    J,
+    K,
+    L,
+    Zero,
+    Caret,
+    Dollar,
+    W,
+    BigW,
+    B,
+    BigB,
+    E,
+    BigE,
+    GE,
+    BigGE,
+    GG,
+    G,
+    Fwd(char),
+    Back(char),
+    TillFwd(char),
+    TillBack(char),
+    Percent,
+    HalfPageDown,
+    HalfPageUp,
+    PageDown,
+    PageUp,
+}
+
+pub fn char_is_word(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+
+fn clamp(rope: &Rope, line: usize, col: usize) -> Pos {
+    let line = line.min(rope.len_lines().saturating_sub(1));
+    let col = col.min(line_chars(rope, line));
+    Pos { line, col }
+}
+
+pub fn apply(rope: &Rope, pos: Pos, m: Motion, count: u32, _view_top: usize, rows: usize) -> Pos {
+    if rope.len_lines() == 0 {
+        return pos;
+    }
+    let n = count.max(1) as usize;
+    let last = rope.len_lines() - 1;
+    match m {
+        Motion::H => clamp(rope, pos.line, pos.col.saturating_sub(n)),
+        Motion::L => {
+            let len = line_chars(rope, pos.line);
+            let max = len.saturating_sub(1);
+            clamp(rope, pos.line, (pos.col + n).min(max))
+        }
+        Motion::J => clamp(rope, pos.line + n, pos.col),
+        Motion::K => clamp(rope, pos.line.saturating_sub(n), pos.col),
+        Motion::Zero => Pos { line: pos.line, col: 0 },
+        Motion::Caret => Pos { line: pos.line, col: first_non_blank(rope, pos.line) },
+        Motion::Dollar => {
+            let c = line_chars(rope, pos.line);
+            Pos { line: pos.line, col: if c == 0 { 0 } else { c - 1 } }
+        }
+        Motion::W => (0..n).fold(pos, |p, _| w_one(rope, p, false)),
+        Motion::BigW => (0..n).fold(pos, |p, _| w_one(rope, p, true)),
+        Motion::B => (0..n).fold(pos, |p, _| b_one(rope, p, false)),
+        Motion::BigB => (0..n).fold(pos, |p, _| b_one(rope, p, true)),
+        Motion::E => (0..n).fold(pos, |p, _| e_one(rope, p, false)),
+        Motion::BigE => (0..n).fold(pos, |p, _| e_one(rope, p, true)),
+        Motion::GE => (0..n).fold(pos, |p, _| ge_one(rope, p, false)),
+        Motion::BigGE => (0..n).fold(pos, |p, _| ge_one(rope, p, true)),
+        Motion::GG => clamp(rope, 0, pos.col),
+        Motion::G => clamp(rope, last, pos.col),
+        Motion::Fwd(c) => find_fwd(rope, pos, c, n, false).unwrap_or(pos),
+        Motion::TillFwd(c) => find_fwd(rope, pos, c, n, true).unwrap_or(pos),
+        Motion::Back(c) => find_back(rope, pos, c, n).unwrap_or(pos),
+        Motion::TillBack(c) => find_back(rope, pos, c, n)
+            .map(|p| clamp(rope, p.line, p.col + 1))
+            .unwrap_or(pos),
+        Motion::Percent => percent(rope, pos),
+        Motion::HalfPageDown => clamp(rope, pos.line + n * (rows / 2).max(1), pos.col),
+        Motion::HalfPageUp => clamp(rope, pos.line.saturating_sub(n * (rows / 2).max(1)), pos.col),
+        Motion::PageDown => clamp(rope, pos.line + n * rows.max(1), pos.col),
+        Motion::PageUp => clamp(rope, pos.line.saturating_sub(n * rows.max(1)), pos.col),
+    }
+}
+
+fn first_non_blank(rope: &Rope, line: usize) -> usize {
+    line_text(rope, line)
+        .char_indices()
+        .find(|(_, c)| !c.is_whitespace())
+        .map(|(i, _)| i)
+        .unwrap_or(0)
+}
+
+fn w_one(rope: &Rope, p: Pos, big: bool) -> Pos {
+    let last = rope.len_lines().saturating_sub(1);
+    let mut line = p.line;
+    let mut col = p.col;
+    let len = line_chars(rope, line);
+    if col >= len {
+        if line >= last {
+            return Pos { line, col };
+        }
+        return Pos { line: line + 1, col: 0 };
+    }
+    loop {
+        let text = line_text(rope, line);
+        let chars: Vec<char> = text.chars().collect();
+        let len = chars.len();
+        if col >= len {
+            if line >= last {
+                return Pos { line, col: len };
+            }
+            line += 1;
+            col = 0;
+            continue;
+        }
+        if chars[col].is_whitespace() {
+            while col < len && chars[col].is_whitespace() {
+                col += 1;
+            }
+            if col >= len {
+                if line >= last {
+                    return Pos { line, col: len };
+                }
+                line += 1;
+                col = 0;
+                continue;
+            }
+            return Pos { line, col };
+        }
+        let start_kind = if big {
+            !chars[col].is_whitespace()
+        } else {
+            char_is_word(chars[col])
+        };
+        while col < len {
+            let c = chars[col];
+            let same = if big {
+                !c.is_whitespace()
+            } else if start_kind {
+                char_is_word(c)
+            } else {
+                !c.is_whitespace() && !char_is_word(c)
+            };
+            if !same {
+                break;
+            }
+            col += 1;
+        }
+        if col >= len {
+            if line >= last {
+                return Pos { line, col };
+            }
+            return Pos { line: line + 1, col: 0 };
+        }
+        while col < len && chars[col].is_whitespace() {
+            col += 1;
+        }
+        if col < len {
+            return Pos { line, col };
+        }
+        if line >= last {
+            return Pos { line, col };
+        }
+        line += 1;
+        col = 0;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rope(s: &str) -> Rope {
+        Rope::from_str(s)
+    }
+
+    fn at(line: usize, col: usize) -> Pos {
+        Pos { line, col }
+    }
+
+    fn m(rope: &Rope, p: Pos, motion: Motion) -> Pos {
+        apply(rope, p, motion, 1, 0, 20)
+    }
+
+    #[test]
+    fn w_moves_to_next_word() {
+        let r = rope("hello world");
+        assert_eq!(m(&r, at(0, 0), Motion::W), at(0, 6));
+    }
+
+    #[test]
+    fn w_three_on_words() {
+        let r = rope("a b c d");
+        assert_eq!(apply(&r, at(0, 0), Motion::W, 3, 0, 20), at(0, 6));
+    }
+
+    #[test]
+    fn w_punct_then_space() {
+        let r = rope("foo.bar baz");
+        assert_eq!(m(&r, at(0, 0), Motion::W), at(0, 3));
+        assert_eq!(m(&r, at(0, 3), Motion::W), at(0, 4));
+        assert_eq!(m(&r, at(0, 7), Motion::BigW), at(0, 8));
+    }
+
+    #[test]
+    fn w_at_line_end_goes_to_next_line() {
+        let r = rope("hello\nworld");
+        assert_eq!(m(&r, at(0, 5), Motion::W), at(1, 0));
+    }
+
+    #[test]
+    fn b_back_to_word_start() {
+        let r = rope("hello world");
+        assert_eq!(m(&r, at(0, 6), Motion::B), at(0, 0));
+        let r = rope("hello world\nagain");
+        assert_eq!(m(&r, at(1, 0), Motion::B), at(0, 6));
+    }
+
+    #[test]
+    fn b_reverse_big_word() {
+        let r = rope("foo.bar baz");
+        assert_eq!(m(&r, at(0, 10), Motion::BigB), at(0, 8));
+    }
+
+    #[test]
+    fn e_lands_on_word_end() {
+        let r = rope("hello world");
+        assert_eq!(m(&r, at(0, 0), Motion::E), at(0, 4));
+        assert_eq!(m(&r, at(0, 4), Motion::E), at(0, 10));
+    }
+
+    #[test]
+    fn ge_prev_word_end() {
+        let r = rope("hello world");
+        assert_eq!(m(&r, at(0, 10), Motion::GE), at(0, 4));
+    }
+
+    #[test]
+    fn gg_and_g_clamp() {
+        let r = rope("one\ntwo\nthree");
+        assert_eq!(m(&r, at(2, 3), Motion::GG), at(0, 3));
+        assert_eq!(m(&r, at(0, 1), Motion::G), at(2, 1));
+        assert_eq!(apply(&r, at(0, 0), Motion::G, 99, 0, 20), at(2, 0));
+    }
+
+    #[test]
+    fn basic_moves_clamp() {
+        let r = rope("ab\ncdef");
+        assert_eq!(m(&r, at(0, 1), Motion::L), at(0, 1));
+        assert_eq!(m(&r, at(0, 0), Motion::H), at(0, 0));
+        assert_eq!(m(&r, at(0, 1), Motion::J), at(1, 1));
+        assert_eq!(m(&r, at(0, 0), Motion::K), at(0, 0));
+        assert_eq!(apply(&r, at(0, 0), Motion::J, 50, 0, 20), at(1, 0));
+        assert_eq!(m(&r, at(1, 0), Motion::Zero), at(1, 0));
+        assert_eq!(m(&r, at(0, 1), Motion::Dollar), at(0, 1));
+    }
+
+    #[test]
+    fn caret_first_non_blank() {
+        let r = rope("    indented");
+        assert_eq!(m(&r, at(0, 9), Motion::Caret), at(0, 4));
+    }
+
+    #[test]
+    fn find_forward_and_till() {
+        let r = rope("xaxbx");
+        assert_eq!(m(&r, at(0, 0), Motion::Fwd('x')), at(0, 2));
+        assert_eq!(apply(&r, at(0, 0), Motion::Fwd('x'), 2, 0, 20), at(0, 4));
+        assert_eq!(m(&r, at(0, 0), Motion::TillFwd('x')), at(0, 1));
+        assert_eq!(m(&r, at(0, 0), Motion::Fwd('z')), at(0, 0));
+        assert_eq!(m(&r, at(0, 0), Motion::TillFwd('z')), at(0, 0));
+    }
+
+    #[test]
+    fn find_backward_and_till_back() {
+        let r = rope("xaxbx");
+        assert_eq!(m(&r, at(0, 4), Motion::Back('x')), at(0, 2));
+        assert_eq!(m(&r, at(0, 4), Motion::TillBack('x')), at(0, 3));
+        assert_eq!(m(&r, at(0, 0), Motion::Back('x')), at(0, 0));
+    }
+
+    #[test]
+    fn percent_matches_paren() {
+        let r = rope("(a(b)c)");
+        assert_eq!(m(&r, at(0, 0), Motion::Percent), at(0, 6));
+        assert_eq!(m(&r, at(0, 6), Motion::Percent), at(0, 0));
+        assert_eq!(m(&r, at(0, 2), Motion::Percent), at(0, 4));
+        assert_eq!(m(&r, at(0, 1), Motion::Percent), at(0, 1));
+    }
+
+    #[test]
+    fn page_and_half_page_clamp() {
+        let text = "l\n".repeat(30);
+        let text = text.trim_end();
+        let r = rope(text);
+        assert_eq!(apply(&r, at(0, 0), Motion::PageDown, 1, 0, 10), at(10, 0));
+        assert_eq!(apply(&r, at(0, 0), Motion::HalfPageDown, 1, 0, 10), at(5, 0));
+        assert_eq!(apply(&r, at(0, 0), Motion::PageUp, 1, 0, 10), at(0, 0));
+        assert_eq!(apply(&r, at(29, 0), Motion::PageDown, 1, 0, 10), at(29, 0));
+    }
+
+    #[test]
+    fn empty_rope_no_panic() {
+        let r = rope("");
+        assert_eq!(m(&r, at(0, 0), Motion::Dollar), at(0, 0));
+        assert_eq!(m(&r, at(0, 0), Motion::W), at(0, 0));
+        assert_eq!(m(&r, at(0, 0), Motion::B), at(0, 0));
+        assert_eq!(m(&r, at(0, 0), Motion::E), at(0, 0));
+        assert_eq!(m(&r, at(0, 0), Motion::G), at(0, 0));
+        assert_eq!(m(&r, at(0, 0), Motion::GE), at(0, 0));
+    }
+}
+
+fn b_one(rope: &Rope, p: Pos, big: bool) -> Pos {
+    let mut line = p.line;
+    let mut col = p.col;
+    if col == 0 {
+        if line == 0 {
+            return Pos { line: 0, col: 0 };
+        }
+        line -= 1;
+        col = line_chars(rope, line);
+    }
+    loop {
+        let chars: Vec<char> = line_text(rope, line).chars().collect();
+        while col > 0 && chars[col - 1].is_whitespace() {
+            col -= 1;
+        }
+        if col > 0 {
+            let start_kind = if big { true } else { char_is_word(chars[col - 1]) };
+            while col > 0 {
+                let c = chars[col - 1];
+                let same = if big {
+                    !c.is_whitespace()
+                } else if start_kind {
+                    char_is_word(c)
+                } else {
+                    !c.is_whitespace() && !char_is_word(c)
+                };
+                if !same {
+                    break;
+                }
+                col -= 1;
+            }
+            return Pos { line, col };
+        }
+        if line == 0 {
+            return Pos { line: 0, col: 0 };
+        }
+        line -= 1;
+        col = line_chars(rope, line);
+        if col == 0 {
+            return Pos { line, col: 0 };
+        }
+    }
+}
+
+fn e_one(rope: &Rope, p: Pos, big: bool) -> Pos {
+    let last = rope.len_lines().saturating_sub(1);
+    let mut line = p.line;
+    let mut col = p.col;
+    let len = line_chars(rope, line);
+    if col >= len.saturating_sub(1) && len > 0 {
+        if line >= last {
+            return Pos { line, col: len.saturating_sub(1) };
+        }
+        line += 1;
+        col = 0;
+    } else if len == 0 {
+        if line >= last {
+            return Pos { line, col: 0 };
+        }
+        line += 1;
+        col = 0;
+    } else {
+        col += 1;
+    }
+    loop {
+        let chars: Vec<char> = line_text(rope, line).chars().collect();
+        if chars.is_empty() {
+            if line >= last {
+                return Pos { line, col: 0 };
+            }
+            line += 1;
+            col = 0;
+            continue;
+        }
+        if col >= chars.len() {
+            if line >= last {
+                return Pos { line, col: chars.len() - 1 };
+            }
+            line += 1;
+            col = 0;
+            continue;
+        }
+        while col < chars.len() && chars[col].is_whitespace() {
+            col += 1;
+        }
+        if col >= chars.len() {
+            if line >= last {
+                return Pos { line, col: chars.len().saturating_sub(1) };
+            }
+            line += 1;
+            col = 0;
+            continue;
+        }
+        let start_kind = if big { true } else { char_is_word(chars[col]) };
+        let mut end = col;
+        while end < chars.len() {
+            let c = chars[end];
+            let same = if big {
+                !c.is_whitespace()
+            } else if start_kind {
+                char_is_word(c)
+            } else {
+                !c.is_whitespace() && !char_is_word(c)
+            };
+            if !same {
+                break;
+            }
+            end += 1;
+        }
+        return Pos { line, col: end - 1 };
+    }
+}
+
+fn ge_one(rope: &Rope, p: Pos, big: bool) -> Pos {
+    let mut p2 = p;
+    loop {
+        let start = b_one(rope, p2, big);
+        if start == p2 && p2.line == 0 && p2.col == 0 {
+            return p;
+        }
+        let chars: Vec<char> = line_text(rope, start.line).chars().collect();
+        let mut col = start.col;
+        while col + 1 < chars.len() && same_class(chars[col], chars[col + 1], big) {
+            col += 1;
+        }
+        let end = Pos {
+            line: start.line,
+            col,
+        };
+        if end != p {
+            return end;
+        }
+        if start == p2 {
+            return p;
+        }
+        p2 = start;
+        if p2.line == 0 && p2.col == 0 {
+            return p;
+        }
+    }
+}
+
+fn same_class(a: char, b: char, big: bool) -> bool {
+    if big {
+        !a.is_whitespace() && !b.is_whitespace()
+    } else if char_is_word(a) {
+        char_is_word(b)
+    } else {
+        !b.is_whitespace() && !char_is_word(b)
+    }
+}
+
+fn find_fwd(rope: &Rope, p: Pos, c: char, n: usize, till: bool) -> Option<Pos> {
+    let text: Vec<char> = line_text(rope, p.line).chars().collect();
+    let mut seen = 0;
+    for i in p.col + 1..text.len() {
+        if text[i] == c {
+            seen += 1;
+            if seen == n {
+                let col = if till { i - 1 } else { i };
+                return Some(Pos { line: p.line, col });
+            }
+        }
+    }
+    None
+}
+
+fn find_back(rope: &Rope, p: Pos, c: char, n: usize) -> Option<Pos> {
+    let text: Vec<char> = line_text(rope, p.line).chars().collect();
+    let mut seen = 0;
+    let limit = p.col.saturating_sub(1);
+    for i in (0..=limit).rev() {
+        if i == p.col {
+            continue;
+        }
+        if text[i] == c {
+            seen += 1;
+            if seen == n {
+                return Some(Pos { line: p.line, col: i });
+            }
+        }
+    }
+    None
+}
+
+fn is_open(c: char) -> bool {
+    matches!(c, '(' | '[' | '{')
+}
+
+fn is_close(c: char) -> bool {
+    matches!(c, ')' | ']' | '}')
+}
+
+fn pairs(c: char) -> Option<(char, char)> {
+    match c {
+        '(' | ')' => Some(('(', ')')),
+        '[' | ']' => Some(('[', ']')),
+        '{' | '}' => Some(('{', '}')),
+        _ => None,
+    }
+}
+
+fn percent(rope: &Rope, p: Pos) -> Pos {
+    let text: Vec<char> = line_text(rope, p.line).chars().collect();
+    let i = if p.col < text.len() && (is_open(text[p.col]) || is_close(text[p.col])) {
+        p.col
+    } else {
+        return p;
+    };
+    let (open, close) = match pairs(text[i]) {
+        Some(pr) => pr,
+        None => return p,
+    };
+    if is_open(text[i]) {
+        let mut depth = 0isize;
+        for j in i..text.len() {
+            if text[j] == open {
+                depth += 1;
+            } else if text[j] == close {
+                depth -= 1;
+                if depth == 0 {
+                    return Pos { line: p.line, col: j };
+                }
+            }
+        }
+    } else {
+        let mut depth = 0isize;
+        for j in (0..=i).rev() {
+            if text[j] == close {
+                depth += 1;
+            } else if text[j] == open {
+                depth -= 1;
+                if depth == 0 {
+                    return Pos { line: p.line, col: j };
+                }
+            }
+        }
+    }
+    p
+}
