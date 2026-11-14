@@ -495,6 +495,7 @@ pub fn draw_content(
         });
     }
 
+    let hover_cols = ((w / cw) as usize).min(80);
     let hover_s = ed
         .lsp
         .hover
@@ -502,7 +503,7 @@ pub fn draw_content(
         .unwrap_or_default()
         .lines()
         .take(8)
-        .map(|s| format!("{:<80.80}", s.replace('\t', "    ")))
+        .map(|s| pad_line(&s.replace('\t', "    "), hover_cols))
         .collect::<Vec<_>>()
         .join("\n");
     let hover_open = !hover_s.is_empty() && ed.panel == crate::fuzzy::Panel::None;
@@ -510,7 +511,7 @@ pub fn draw_content(
     if hover_open {
         let nrows = hover_s.lines().count() as f32;
         let row = (1 + ed.buf().cursor.line.saturating_sub(ed.buf().view_top)) as f32;
-        let hw = 60.0f32.max(cw * 30.0).min(w);
+        let hw = hover_cols as f32 * cw;
         let hx = (l.gutter_cols as f32 * cw + 10.0 * cw).min(w - hw);
         let hy = (row * ch + ch).min(h - (nrows + 1.0) * ch);
         hover_pos = Some((hx, hy));
@@ -548,7 +549,7 @@ pub fn draw_content(
         }
         let nrows = comp_s.lines().count() as f32;
         let row = (1 + cs.line.saturating_sub(ed.buf().view_top)) as f32;
-        let cwid = 41.0f32 * cw;
+        let cwid = 42.0f32 * cw;
         let cx = ((l.gutter_cols as f32 + cs.col as f32) * cw).min(w - cwid);
         let cy = ((row + 1.0) * ch).min(h - nrows * ch);
         comp_pos = Some((cx, cy, nrows));
@@ -573,19 +574,22 @@ pub fn draw_content(
     let mut popup_s = String::new();
     let popup_open = ed.panel != crate::fuzzy::Panel::None;
     if popup_open {
-        if ed.panel_query.is_empty() {
-            popup_s.push(' ');
-        } else {
-            popup_s.push_str(&ed.panel_query);
-        }
         let max_rows = 15usize;
+        let shown = ed.panel_order.len().min(max_rows);
+        let box_cols = (l.cols as f32 * 0.5).max(40.0).min(l.cols as f32) as usize;
+        let pw = box_cols as f32 * cw;
+        popup_s.push_str(&pad_line(&ed.panel_query, box_cols));
         for (row, &idx) in ed.panel_order.iter().take(max_rows).enumerate() {
             popup_s.push('\n');
-            popup_s.push_str(if row == ed.panel_cursor { "> " } else { "  " });
-            popup_s.push_str(&ed.panel_items[idx]);
+            popup_s.push_str(&pad_line(
+                &format!(
+                    "{}{}",
+                    if row == ed.panel_cursor { "> " } else { "  " },
+                    ed.panel_items[idx]
+                ),
+                box_cols,
+            ));
         }
-        let shown = ed.panel_order.len().min(max_rows);
-        let pw = (l.cols as f32 * 0.5).max(40.0).min(l.cols as f32) * cw;
         overlay.push(rects::RectInstance {
             x: 0.0,
             y: ch,
@@ -596,7 +600,7 @@ pub fn draw_content(
         if !ed.panel_order.is_empty() {
             overlay.push(rects::RectInstance {
                 x: 0.0,
-                y: (1 + ed.panel_cursor.min(shown.saturating_sub(1))) as f32 * ch,
+                y: (2 + ed.panel_cursor.min(shown.saturating_sub(1))) as f32 * ch,
                 w: pw,
                 h: ch,
                 color: theme.popup_sel,
@@ -782,6 +786,11 @@ fn fit(s: &str, room: usize) -> String {
     s.chars().take(room).collect()
 }
 
+fn pad_line(s: &str, cols: usize) -> String {
+    let trimmed: String = s.chars().take(cols).collect();
+    format!("{trimmed:<cols$}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -852,5 +861,12 @@ mod tests {
                 "{name} is proportional and must not drive the cell grid"
             );
         }
+    }
+
+    #[test]
+    fn pad_line_fits_text_to_the_popup_width() {
+        assert_eq!(pad_line("0123456789", 6), "012345");
+        assert_eq!(pad_line("ab", 5), "ab   ");
+        assert_eq!(pad_line("", 3), "   ");
     }
 }
