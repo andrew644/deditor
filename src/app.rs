@@ -447,20 +447,60 @@ impl Editor {
         self.clear_pending();
     }
 
+    pub fn newline_in_insert(&mut self) {
+        let co = self.coalesce_open;
+        let c = self.buf().cursor;
+        let tw = self.tab_width();
+        let before: String = crate::buffer::line_text(&self.buf().rope, c.line)
+            .chars()
+            .take(c.col)
+            .collect();
+        let ind = crate::buffer::indent_below(&before, tw);
+        self.buf_mut().insert_text("\n", co);
+        self.buf_mut().insert_text(&ind, co);
+    }
+
     pub fn new_line_below(&mut self) {
         let c = self.buf().cursor;
         let len = line_chars(&self.buf().rope, c.line);
+        let tw = self.tab_width();
+        let ind = crate::buffer::indent_below(&crate::buffer::line_text(&self.buf().rope, c.line), tw);
         self.buf_mut().cursor = Pos { line: c.line, col: len };
         self.buf_mut().insert_text("\n", false);
+        if !ind.is_empty() {
+            self.buf_mut().insert_text(&ind, false);
+        }
         self.enter_insert();
     }
 
     pub fn new_line_above(&mut self) {
         let c = self.buf().cursor;
+        let tw = self.tab_width();
+        let ind = crate::buffer::indent_above(&crate::buffer::line_text(&self.buf().rope, c.line), tw);
         self.buf_mut().cursor = Pos { line: c.line, col: 0 };
         self.buf_mut().insert_text("\n", false);
         self.buf_mut().cursor = Pos { line: c.line, col: 0 };
+        if !ind.is_empty() {
+            self.buf_mut().insert_text(&ind, false);
+        }
         self.enter_insert();
+    }
+
+    pub fn close_bracket_indent(&mut self, ch: char) {
+        if !matches!(ch, '}' | ')' | ']') {
+            return;
+        }
+        let c = self.buf().cursor;
+        let text = crate::buffer::line_text(&self.buf().rope, c.line);
+        if !text.chars().take(c.col).all(|x| x == ' ' || x == '\t') {
+            return;
+        }
+        let tw = self.tab_width();
+        let removed = self.buf_mut().dedent_line(c.line, tw);
+        self.buf_mut().cursor = Pos {
+            line: c.line,
+            col: c.col.saturating_sub(removed),
+        };
     }
 
     pub fn run_motion(&mut self, m: crate::motions::Motion, count: u32) {

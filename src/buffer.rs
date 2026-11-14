@@ -42,6 +42,66 @@ pub fn line_text(rope: &Rope, line: usize) -> String {
     rope.line(line).chars().take_while(|c| *c != '\n').collect()
 }
 
+fn leading_ws(text: &str) -> String {
+    text.chars()
+        .take_while(|c| *c == ' ' || *c == '\t')
+        .collect()
+}
+
+pub fn indent_below(prev: &str, tab_width: usize) -> String {
+    let lead = leading_ws(prev);
+    let code = code_part(prev.trim_start());
+    if code.starts_with('#') {
+        return lead;
+    }
+    match code.chars().last() {
+        Some('{') | Some(':') => lead + &" ".repeat(tab_width),
+        _ => lead,
+    }
+}
+
+pub fn indent_above(line: &str, tab_width: usize) -> String {
+    let lead = leading_ws(line);
+    let code = code_part(line.trim_start());
+    if code.starts_with(['}', ')', ']']) {
+        return trim_one(&lead, tab_width);
+    }
+    lead
+}
+
+fn trim_one(lead: &str, tab_width: usize) -> String {
+    if let Some(rest) = lead.strip_prefix('\t') {
+        return rest.to_string();
+    }
+    lead.chars().skip(tab_width.min(lead.chars().count())).collect()
+}
+
+fn code_part(text: &str) -> &str {
+    let mut in_str = None;
+    let mut prev = '\0';
+    let mut chars = text.char_indices().peekable();
+    while let Some((i, c)) = chars.next() {
+        match in_str {
+            Some(q) => {
+                if c == q && prev != '\\' {
+                    in_str = None;
+                }
+            }
+            None => {
+                if c == '"' || c == '\'' {
+                    in_str = Some(c);
+                } else if c == '/'
+                    && matches!(chars.peek(), Some((_, '/')) | Some((_, '*')))
+                {
+                    return text[..i].trim_end();
+                }
+            }
+        }
+        prev = c;
+    }
+    text.trim_end()
+}
+
 impl Buffer {
     pub fn empty() -> Self {
         Self {
@@ -134,6 +194,21 @@ impl Buffer {
 
     pub fn refresh_dirty(&mut self) {
         self.dirty = self.rope != self.saved;
+    }
+
+    pub fn dedent_line(&mut self, line: usize, tab_width: usize) -> usize {
+        let lead = leading_ws(&line_text(&self.rope, line));
+        if lead.is_empty() {
+            return 0;
+        }
+        let chars = lead.chars().count();
+        let remove = if lead.starts_with('\t') {
+            1
+        } else {
+            tab_width.min(chars)
+        };
+        self.delete_text(Pos { line, col: 0 }, Pos { line, col: remove });
+        remove
     }
 
     pub fn insert_text(&mut self, text: &str, coalesce: bool) {
@@ -285,4 +360,52 @@ mod tests {
         assert!(b.dirty);
         std::fs::remove_dir_all(&dir).ok();
     }
+
+    #[test]
+    fn new_lines_inherit_the_indent_level() {
+        assert_eq!(indent_below("    foo();", 4), "    ");
+        assert_eq!(indent_below("", 4), "");
+        assert_eq!(indent_below("\tcall();", 4), "\t");
+        assert_eq!(indent_below("    if (x) {", 4), "        ");
+        assert_eq!(indent_below("\tswitch (v) {", 4), "\t    ");
+        assert_eq!(indent_below("case 1:", 4), "    ");
+    }
+
+    #[test]
+    fn indent_level_ignores_comments_and_strings() {
+        assert_eq!(indent_below("    // note {", 4), "    ");
+        assert_eq!(indent_below("    return 1; // }", 4), "    ");
+        assert_eq!(indent_below("    s = \"{\"", 4), "    ");
+        assert_eq!(indent_below("#define X {", 4), "");
+        assert_eq!(indent_below("    #pragma once", 4), "    ");
+    }
+
+    #[test]
+    fn closing_lines_dedent_one_level() {
+        assert_eq!(indent_above("    }", 4), "");
+        assert_eq!(indent_above("        }", 4), "    ");
+        assert_eq!(indent_above("\t}", 4), "");
+        assert_eq!(indent_above("}", 4), "");
+        assert_eq!(indent_above("    foo();", 4), "    ");
+    }
+
+    #[test]
+    fn dedent_line_removes_one_indent_unit() {
+        let mut b = Buffer::empty();
+        b.insert_text("    x\n", false);
+        assert_eq!(b.dedent_line(0, 4), 4);
+        assert_eq!(b.rope.to_string(), "x\n");
+        assert_eq!(b.dedent_line(0, 4), 0);
+
+        let mut short = Buffer::empty();
+        short.insert_text("  y\n", false);
+        assert_eq!(short.dedent_line(0, 4), 2);
+        assert_eq!(short.rope.to_string(), "y\n");
+
+        let mut tabs = Buffer::empty();
+        tabs.insert_text("\t\tx\n", false);
+        assert_eq!(tabs.dedent_line(0, 4), 1);
+        assert_eq!(tabs.rope.to_string(), "\tx\n");
+    }
+
 }

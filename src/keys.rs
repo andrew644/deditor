@@ -396,8 +396,7 @@ fn insert_key(ed: &mut Editor, key: &Key, mods: ModifiersState) {
         Key::Named(NamedKey::Escape) => ed.leave_insert(),
         Key::Named(NamedKey::Enter) => {
             ed.comp_cancel();
-            let co = ed.coalesce_open;
-            ed.buf_mut().insert_text("\n", co);
+            ed.newline_in_insert();
         }
         Key::Named(NamedKey::Backspace) => {
             ed.comp_cancel();
@@ -413,6 +412,9 @@ fn insert_key(ed: &mut Editor, key: &Key, mods: ModifiersState) {
         }
         Key::Character(s)
             if s.chars().next().is_some_and(|c| !c.is_control()) => {
+                if let Some(ch) = s.chars().next() {
+                    ed.close_bracket_indent(ch);
+                }
                 let co = ed.coalesce_open;
                 ed.buf_mut().insert_text(s, co);
                 ed.maybe_completion(s);
@@ -626,6 +628,92 @@ mod tests {
         );
         assert_eq!(ed.buf().rope.to_string(), "a xb");
         assert_eq!(ed.buf().cursor, Pos { line: 0, col: 3 });
+    }
+
+    #[test]
+    fn open_line_indents_after_an_opening_brace() {
+        let mut ed = Editor::new(None);
+        ed.config.tab_width = 4;
+        ed.buf_mut().insert_text("int main() {\n", false);
+        ed.buf_mut().cursor = Pos { line: 0, col: 0 };
+        type_keys(&mut ed, &[Key::Character("o".into())]);
+        assert_eq!(ed.mode, Mode::Insert);
+        assert_eq!(ed.buf().cursor, Pos { line: 1, col: 4 });
+        type_keys(
+            &mut ed,
+            &[
+                Key::Character("f".into()),
+                Key::Named(NamedKey::Escape),
+            ],
+        );
+        assert_eq!(ed.buf().rope.to_string(), "int main() {\n    f\n");
+    }
+
+    #[test]
+    fn open_above_copies_the_line_below_indent() {
+        let mut ed = Editor::new(None);
+        ed.config.tab_width = 4;
+        ed.buf_mut().insert_text("    foo();\n", false);
+        ed.buf_mut().cursor = Pos { line: 0, col: 2 };
+        type_keys(&mut ed, &[Key::Character("O".into())]);
+        assert_eq!(ed.buf().cursor, Pos { line: 0, col: 4 });
+        assert_eq!(ed.buf().rope.to_string(), "    \n    foo();\n");
+
+        let mut closing = Editor::new(None);
+        closing.config.tab_width = 4;
+        closing.buf_mut().insert_text("    foo();\n    }\n", false);
+        closing.buf_mut().cursor = Pos { line: 1, col: 0 };
+        type_keys(&mut closing, &[Key::Character("O".into())]);
+        assert_eq!(
+            closing.buf().rope.to_string(),
+            "    foo();\n\n    }\n"
+        );
+    }
+
+    #[test]
+    fn enter_in_insert_mode_repeats_the_indent() {
+        let mut ed = Editor::new(None);
+        ed.config.tab_width = 4;
+        ed.buf_mut().insert_text("    foo();\n", false);
+        ed.buf_mut().cursor = Pos { line: 0, col: 10 };
+        ed.enter_insert();
+        type_keys(
+            &mut ed,
+            &[
+                Key::Named(NamedKey::Enter),
+                Key::Character("x".into()),
+            ],
+        );
+        assert_eq!(ed.buf().rope.to_string(), "    foo();\n    x\n");
+        assert_eq!(ed.buf().cursor, Pos { line: 1, col: 5 });
+    }
+
+    #[test]
+    fn typing_a_leading_closing_brace_dedents_the_line() {
+        let mut ed = Editor::new(None);
+        ed.config.tab_width = 4;
+        ed.buf_mut().insert_text("int main() {\n", false);
+        ed.buf_mut().cursor = Pos { line: 0, col: 12 };
+        type_keys(&mut ed, &[Key::Character("o".into())]);
+        type_keys(
+            &mut ed,
+            &[
+                Key::Character("x".into()),
+                Key::Named(NamedKey::Enter),
+                Key::Character("}".into()),
+            ],
+        );
+        assert_eq!(ed.buf().rope.to_string(), "int main() {\n    x\n}\n");
+        assert_eq!(ed.buf().cursor, Pos { line: 2, col: 1 });
+
+        let mut mid = Editor::new(None);
+        mid.config.tab_width = 4;
+        mid.buf_mut().insert_text("    x", false);
+        mid.buf_mut().cursor = Pos { line: 0, col: 5 };
+        mid.enter_insert();
+        type_keys(&mut mid, &[Key::Character("}".into())]);
+        assert_eq!(mid.buf().rope.to_string(), "    x}");
+        assert_eq!(mid.buf().cursor, Pos { line: 0, col: 6 });
     }
 
     #[test]
