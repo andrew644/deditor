@@ -154,10 +154,10 @@ impl TextSystem {
     /// The family used for both measuring and drawing. A name without a
     /// fixed-pitch face falls back to `Monospace`; the cell grid is only valid
     /// when every glyph advances by exactly one cell.
+    /// Shape without a color so each `TextArea`'s `default_color` (the theme) wins:
+    /// cosmic-text stamps `Attrs::color_opt` onto every glyph and glyphon prefers it.
     pub fn attrs<'a>(&'a self) -> Attrs<'a> {
-        Attrs::new()
-            .family(grid_family(&self.font_system, &self.family_name))
-            .color(glyphon::Color::rgb(255, 255, 255))
+        Attrs::new().family(grid_family(&self.font_system, &self.family_name))
     }
 
     pub fn remeasure(&mut self) {
