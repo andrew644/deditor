@@ -22,6 +22,7 @@ pub struct UndoEntry {
 pub struct Buffer {
     pub path: Option<PathBuf>,
     pub rope: Rope,
+    pub saved: Rope,
     pub cursor: Pos,
     pub view_top: usize,
     pub dirty: bool,
@@ -46,6 +47,7 @@ impl Buffer {
         Self {
             path: None,
             rope: Rope::from_str(""),
+            saved: Rope::from_str(""),
             cursor: Pos { line: 0, col: 0 },
             view_top: 0,
             dirty: false,
@@ -64,6 +66,7 @@ impl Buffer {
         let rope = Rope::from_str(&text);
         Ok(Self {
             path: Some(path.to_path_buf()),
+            saved: rope.clone(),
             rope,
             crlf,
             ..Self::empty()
@@ -119,6 +122,20 @@ impl Buffer {
         }
     }
 
+    pub fn mark_saved(&mut self) {
+        self.saved = self.rope.clone();
+        self.dirty = false;
+    }
+
+    pub fn after_edit(&mut self) {
+        self.redo.clear();
+        self.refresh_dirty();
+    }
+
+    pub fn refresh_dirty(&mut self) {
+        self.dirty = self.rope != self.saved;
+    }
+
     pub fn insert_text(&mut self, text: &str, coalesce: bool) {
         let at = self.cursor;
         let before = self.rope.len_chars();
@@ -126,8 +143,7 @@ impl Buffer {
         self.rope.insert(off, text);
         let _ = before;
         self.cursor = self.pos_of(off + text.chars().count());
-        self.dirty = true;
-        self.redo.clear();
+        self.after_edit();
         if coalesce
             && let Some(last) = self.undo.last_mut()
             && let Change::Insert {
@@ -164,8 +180,7 @@ impl Buffer {
         let text = self.rope.slice(s..e).to_string();
         self.rope.remove(s..e);
         self.cursor = start;
-        self.dirty = true;
-        self.redo.clear();
+        self.after_edit();
         self.undo.push(UndoEntry {
             change: Change::Delete {
                 at: start,
@@ -193,7 +208,7 @@ impl Buffer {
         }
         self.cursor = e.cursor_before;
         self.clamp();
-        self.dirty = true;
+        self.refresh_dirty();
         self.redo.push(e);
     }
 
@@ -213,7 +228,61 @@ impl Buffer {
         }
         self.cursor = e.cursor_after;
         self.clamp();
-        self.dirty = true;
+        self.refresh_dirty();
         self.undo.push(e);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn undo_back_to_saved_content_clears_dirty() {
+        let mut b = Buffer::empty();
+        b.insert_text("one\ntwo\n", false);
+        assert!(b.dirty);
+        b.mark_saved();
+        assert!(!b.dirty);
+        b.cursor = Pos { line: 1, col: 0 };
+        b.delete_text(Pos { line: 1, col: 0 }, Pos { line: 1, col: 3 });
+        assert!(b.dirty);
+        b.undo();
+        assert_eq!(b.rope.to_string(), "one\ntwo\n");
+        assert!(!b.dirty);
+        b.redo_action();
+        assert!(b.dirty);
+    }
+
+    #[test]
+    fn unnamed_buffer_is_clean_when_content_returns_to_empty() {
+        let mut b = Buffer::empty();
+        b.insert_text("abc", true);
+        assert!(b.dirty);
+        b.undo();
+        assert!(!b.dirty);
+    }
+
+    #[test]
+    fn loaded_buffer_tracks_the_file_on_disk() {
+        let dir = std::env::temp_dir().join("deditor_saved_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("s.txt");
+        std::fs::write(&f, "alpha\nbeta\n").unwrap();
+        let mut b = Buffer::load(&f).unwrap();
+        assert!(!b.dirty);
+        let at = Pos { line: 1, col: 0 };
+        b.delete_text(at, Pos { line: 1, col: 4 });
+        assert!(b.dirty);
+        b.undo();
+        assert!(!b.dirty);
+        b.insert_text("gamma\n", false);
+        assert!(b.dirty);
+        b.save().unwrap();
+        b.mark_saved();
+        assert!(!b.dirty);
+        b.undo();
+        assert!(b.dirty);
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

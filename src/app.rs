@@ -302,8 +302,7 @@ impl Editor {
                             line: cur.line,
                             col: 0,
                         };
-                        b2.dirty = true;
-                        b2.redo.clear();
+                        b2.after_edit();
                         b2.undo.push(crate::buffer::UndoEntry {
                             change: crate::buffer::Change::Delete { at: cur, text },
                             cursor_before: cur,
@@ -343,8 +342,7 @@ impl Editor {
                 let off = self.buf().offset_of(at);
                 let b = self.buf_mut();
                 b.rope.insert(off, &" ".repeat(tw));
-                b.dirty = true;
-                b.redo.clear();
+                b.after_edit();
             } else {
                 let line_s = crate::buffer::line_text(&self.buf().rope, line);
                 let n = line_s.chars().take(tw).take_while(|c| *c == ' ').count();
@@ -352,8 +350,7 @@ impl Editor {
                     let b = self.buf_mut();
                     let off = b.rope.line_to_char(line);
                     b.rope.remove(off..off + n);
-                    b.dirty = true;
-                    b.redo.clear();
+                    b.after_edit();
                 }
             }
         }
@@ -424,8 +421,7 @@ impl Editor {
             let off = b.offset_of(c);
             b.rope.remove(off..off + 1);
             b.rope.insert(off, &ch.to_string());
-            b.dirty = true;
-            b.redo.clear();
+            b.after_edit();
             b.undo.push(crate::buffer::UndoEntry {
                 change: crate::buffer::Change::Delete {
                     at: c,
@@ -458,8 +454,7 @@ impl Editor {
             b.rope.remove(s..e);
             b.rope.insert(s, glue);
             b.cursor = Pos { line, col: len };
-            b.dirty = true;
-            b.redo.clear();
+            b.after_edit();
         }
         self.buf_mut().clamp();
         self.clear_pending();
@@ -730,7 +725,7 @@ impl Editor {
         match res {
             Ok(()) => {
                 let b = self.buf_mut();
-                b.dirty = false;
+                b.mark_saved();
                 let name = b.display_name();
                 let lines = b.rope.len_lines();
                 let chars = b.rope.len_chars();
@@ -1212,6 +1207,35 @@ mod tests {
         ed.execute_cmdline();
         assert!(!ed.buf().dirty);
         assert_eq!(std::fs::read_to_string(&f).unwrap(), "hello\n");
+        ed.cmdline = "q".to_string();
+        ed.execute_cmdline();
+        assert!(ed.quit);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn undo_after_write_remarks_dirty_against_written_text() {
+        let dir = std::env::temp_dir().join("deditor_undo_dirty_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("u.txt");
+        std::fs::write(&f, "alpha\n").unwrap();
+        let mut ed = Editor::new(Some(&f));
+        assert!(!ed.buf().dirty);
+        ed.buf_mut().insert_text("beta\n", false);
+        assert!(ed.buf().dirty);
+        ed.buf_mut().undo();
+        assert!(!ed.buf().dirty);
+        ed.buf_mut().insert_text("gamma\n", false);
+        ed.cmdline = "w".to_string();
+        ed.execute_cmdline();
+        assert!(!ed.buf().dirty);
+        assert_eq!(std::fs::read_to_string(&f).unwrap(), "gamma\nalpha\n");
+        ed.buf_mut().undo();
+        assert!(ed.buf().dirty);
+        assert_eq!(std::fs::read_to_string(&f).unwrap(), "gamma\nalpha\n");
+        ed.cmdline = "w".to_string();
+        ed.execute_cmdline();
+        assert!(!ed.buf().dirty);
         ed.cmdline = "q".to_string();
         ed.execute_cmdline();
         assert!(ed.quit);
