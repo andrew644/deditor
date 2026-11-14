@@ -100,6 +100,10 @@ pub struct TextSystem {
     pub viewport: Viewport,
     pub atlas: TextAtlas,
     pub renderer: TextRenderer,
+    /// Used by the overlay layer. `TextRenderer::render` destroys and replaces its own
+    /// vertex buffer when it grows, which would invalidate a first layer's recorded
+    /// draw, so each layer needs a renderer of its own.
+    pub overlay_renderer: TextRenderer,
     pub family_name: String,
     pub font_size_px: f32,
     pub cell_w: f32,
@@ -125,12 +129,19 @@ impl TextSystem {
             wgpu::MultisampleState::default(),
             None,
         );
+        let overlay_renderer = TextRenderer::new(
+            &mut atlas,
+            device,
+            wgpu::MultisampleState::default(),
+            None,
+        );
         let mut ts = Self {
             font_system,
             swash_cache,
             viewport,
             atlas,
             renderer,
+            overlay_renderer,
             family_name,
             font_size_px,
             cell_w: 8.0,
@@ -647,6 +658,7 @@ pub fn draw_content(
         view,
         Layer {
             load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+            overlay: false,
             rects,
             areas,
         },
@@ -660,6 +672,7 @@ pub fn draw_content(
             view,
             Layer {
                 load: wgpu::LoadOp::Load,
+                overlay: true,
                 rects: overlay,
                 areas: oareas,
             },
@@ -672,6 +685,7 @@ pub fn draw_content(
 /// background in a later layer is what hides the buffer text underneath it.
 struct Layer<'a> {
     load: wgpu::LoadOp<wgpu::Color>,
+    overlay: bool,
     rects: Vec<rects::RectInstance>,
     areas: Vec<(&'a mut Buffer, f32, f32, u32)>,
 }
@@ -684,7 +698,10 @@ fn draw_layer(
     view: &wgpu::TextureView,
     layer: Layer<'_>,
 ) {
-    let Layer { load, rects, areas } = layer;
+    let Layer { load, overlay, rects, areas } = layer;
+    let TextSystem { renderer, overlay_renderer, font_system, atlas, viewport, swash_cache, .. } =
+        ts;
+    let renderer = if overlay { overlay_renderer } else { renderer };
     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
         label: None,
         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -698,24 +715,17 @@ fn draw_layer(
         occlusion_query_set: None,
         multiview_mask: None,
     });
-    rp.draw(
-        &gpu.device,
-        &gpu.queue,
-        &mut pass,
-        gpu.config.width,
-        gpu.config.height,
-        &rects,
-    );
+    rp.draw(gpu, &mut pass, &rects, overlay);
     if areas.is_empty() {
         return;
     }
-    ts.renderer
+    renderer
         .prepare(
             &gpu.device,
             &gpu.queue,
-            &mut ts.font_system,
-            &mut ts.atlas,
-            &ts.viewport,
+            font_system,
+            atlas,
+            viewport,
             areas.into_iter().map(|(b, x, y, color)| glyphon::TextArea {
                 buffer: b,
                 left: x,
@@ -730,11 +740,11 @@ fn draw_layer(
                 default_color: glyphon::Color(color),
                 custom_glyphs: &[],
             }),
-            &mut ts.swash_cache,
+            swash_cache,
         )
         .unwrap();
-    ts.renderer
-        .render(&ts.atlas, &ts.viewport, &mut pass)
+    renderer
+        .render(atlas, viewport, &mut pass)
         .unwrap();
 }
 

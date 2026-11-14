@@ -1,3 +1,4 @@
+use crate::render::Gpu;
 use bytemuck::{Pod, Zeroable};
 
 #[repr(C)]
@@ -67,8 +68,36 @@ pub struct RectPipeline {
     pipeline: wgpu::RenderPipeline,
     bind_layout: wgpu::BindGroupLayout,
     screen_uniform: wgpu::Buffer,
-    instance_buf: wgpu::Buffer,
-    instance_cap: usize,
+    /// One slot per layer: a layer's draw reads its instances from the buffer at submit
+    /// time, so the overlay layer must not rewrite the buffer the base layer recorded.
+    slots: [Instances; 2],
+}
+
+struct Instances {
+    buf: wgpu::Buffer,
+    cap: usize,
+}
+
+impl Instances {
+    fn new(device: &wgpu::Device, cap: usize) -> Self {
+        Self {
+            buf: device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("rect-instances"),
+                size: (cap * std::mem::size_of::<RectInstance>()) as u64,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }),
+            cap,
+        }
+    }
+
+    fn write(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, rects: &[RectInstance]) {
+        if self.cap < rects.len() {
+            let cap = rects.len().next_power_of_two();
+            *self = Self::new(device, cap);
+        }
+        queue.write_buffer(&self.buf, 0, bytemuck::cast_slice(rects));
+    }
 }
 
 impl RectPipeline {
@@ -138,42 +167,25 @@ impl RectPipeline {
             pipeline,
             bind_layout,
             screen_uniform,
-            instance_buf: device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("rect-instances"),
-                size: 256 * std::mem::size_of::<RectInstance>() as u64,
-                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            }),
-            instance_cap: 256,
+            slots: [Instances::new(device, 256), Instances::new(device, 64)],
         }
     }
 
     pub fn draw(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
+        gpu: &Gpu,
         pass: &mut wgpu::RenderPass<'_>,
-        screen_w: u32,
-        screen_h: u32,
         rects: &[RectInstance],
+        overlay: bool,
     ) {
         if rects.is_empty() {
             return;
         }
-        queue.write_buffer(&self.screen_uniform, 0, bytemuck::bytes_of(&[screen_w as f32, screen_h as f32]));
-        let need = rects.len();
-        if need > self.instance_cap {
-            let cap = need.next_power_of_two();
-            self.instance_buf = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("rect-instances"),
-                size: (cap * std::mem::size_of::<RectInstance>()) as u64,
-                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            self.instance_cap = cap;
-        }
-        queue.write_buffer(&self.instance_buf, 0, bytemuck::cast_slice(rects));
-        let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let screen = [gpu.config.width as f32, gpu.config.height as f32];
+        gpu.queue.write_buffer(&self.screen_uniform, 0, bytemuck::bytes_of(&screen));
+        let slot = usize::from(overlay);
+        self.slots[slot].write(&gpu.device, &gpu.queue, rects);
+        let bind = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("rect-bg"),
             layout: &self.bind_layout,
             entries: &[wgpu::BindGroupEntry {
@@ -183,7 +195,7 @@ impl RectPipeline {
         });
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &bind, &[]);
-        pass.set_vertex_buffer(0, self.instance_buf.slice(..));
-        pass.draw(0..6, 0..need as u32);
+        pass.set_vertex_buffer(0, self.slots[slot].buf.slice(..));
+        pass.draw(0..6, 0..rects.len() as u32);
     }
 }
