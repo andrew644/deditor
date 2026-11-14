@@ -99,6 +99,7 @@ fn normal_key(ed: &mut Editor, key: &Key, mods: ModifiersState) {
         return;
     }
     ed.lsp.hover = None;
+    ed.status = None;
     if *key == Key::Named(NamedKey::Escape) {
         ed.clear_pending();
         if ed.mode == Mode::Visual {
@@ -660,5 +661,13 @@ mod tests {
         type_keys(&mut ed, &[Key::Character("l".into())]);
         type_keys(&mut ed, &[Key::Character("r".into()), Key::Named(NamedKey::Space)]);
         assert_eq!(ed.buf().rope.to_string(), "a  ");
+    }
+
+    #[test]
+    fn normal_key_clears_the_echo_message() {
+        let mut ed = Editor::new(None);
+        ed.set_status("E37: No write since last change".to_string(), true);
+        type_keys(&mut ed, &[Key::Character("l".into())]);
+        assert_eq!(ed.status, None);
     }
 }

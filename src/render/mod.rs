@@ -420,23 +420,19 @@ pub fn draw_content(
             body_s.push('\n');
         }
     }
-    let mut status_s = format!(
-        " {}{} ",
-        buf.display_name(),
-        if buf.dirty { "[+]" } else { "" }
-    );
-    let pend = pending_label(ed);
-    if !pend.is_empty() {
-        status_s.push_str(&format!(" [{pend}]"));
-    }
-    let center = format!(
-        "LINE {}, COL {}",
-        buf.cursor.line + 1,
-        buf.cursor.col + 1
-    );
-    let pad = (l.cols as usize / 2).saturating_sub(status_s.chars().count());
-    status_s.extend(std::iter::repeat_n(' ', pad));
-    status_s.push_str(&center);
+    let diags = ed.lsp.diags_for(buf.path.as_ref());
+    let cursor_diag = diags
+        .iter()
+        .find(|d| d.line == buf.cursor.line)
+        .map(|d| {
+            let tag = if d.severity == crate::lsp::SEV_WARN {
+                "WARN"
+            } else {
+                "ERR"
+            };
+            format!("{tag}: {}", d.message.replace('\n', " "))
+        });
+    let msg = ed.status.clone().or(cursor_diag).unwrap_or_default();
     let mode_label = match ed.mode {
         crate::mode::Mode::Normal => "NORMAL",
         crate::mode::Mode::Insert => "INSERT",
@@ -446,35 +442,41 @@ pub fn draw_content(
             crate::mode::CmdKind::Search | crate::mode::CmdKind::SearchBack => "-- SEARCH --",
         },
     };
-    let pad = (l.cols as usize)
-        .saturating_sub(status_s.chars().count() + mode_label.chars().count() + 2);
-    status_s.extend(std::iter::repeat_n(' ', pad));
-    status_s.push_str(mode_label);
-    if let Some(kind) = ed.cmd_kind {
-        let p = match kind {
-            crate::mode::CmdKind::Ex => ":",
-            crate::mode::CmdKind::Search => "/",
-            crate::mode::CmdKind::SearchBack => "?",
-        };
-        status_s = format!(" {p}{}", ed.cmdline);
-    }
-    let diags = ed.lsp.diags_for(ed.buf().path.as_ref());
-    let cursor_diag = diags
-        .iter()
-        .find(|d| d.line == ed.buf().cursor.line)
-        .map(|d| {
-            let tag = if d.severity == crate::lsp::SEV_WARN {
-                "WARN"
-            } else {
-                "ERR"
+    let ruler = format!("LINE {}, COL {}", buf.cursor.line + 1, buf.cursor.col + 1);
+    let right_x = (l.cols as usize)
+        .saturating_sub(ruler.chars().count() + mode_label.chars().count() + 3)
+        .max(1);
+    let room = right_x.saturating_sub(1);
+    let left_s = match ed.cmd_kind {
+        Some(kind) => {
+            let p = match kind {
+                crate::mode::CmdKind::Ex => ":",
+                crate::mode::CmdKind::Search => "/",
+                crate::mode::CmdKind::SearchBack => "?",
             };
-            format!("{tag}: {}", d.message.replace('\n', " "))
-        });
-    let err_s = ed
-        .status
-        .clone()
-        .or(cursor_diag)
-        .unwrap_or_default();
+            format!(" {p}{}", ed.cmdline)
+        }
+        None if !msg.is_empty() => format!(" {msg}"),
+        None => {
+            let pend = pending_label(ed);
+            let mut s = format!(
+                " {}{}",
+                buf.display_name(),
+                if buf.dirty { "[+]" } else { "" }
+            );
+            if !pend.is_empty() {
+                s.push_str(&format!(" [{pend}]"));
+            }
+            s
+        }
+    };
+    let left_s = fit(&left_s, room);
+    let right_s = format!("{ruler}  {mode_label}");
+    let left_color = if ed.cmd_kind.is_none() && !msg.is_empty() {
+        theme.error
+    } else {
+        theme.fg
+    };
     for d in diags {
         if d.line < ed.buf().view_top || d.line - ed.buf().view_top >= l.rows as usize {
             continue;
@@ -605,8 +607,8 @@ pub fn draw_content(
     let mut tb_tab = mkbuf(ts, &tab_text, w, h);
     let mut tb_gutter = mkbuf(ts, &gutter_s, w, h);
     let mut tb_body = mkbuf(ts, &body_s, w, h);
-    let mut tb_status = mkbuf(ts, &status_s, w, h);
-    let mut tb_err = mkbuf(ts, &err_s, w, h);
+    let mut tb_msg = mkbuf(ts, &left_s, w, h);
+    let mut tb_ruler = mkbuf(ts, &right_s, w, h);
     let mut tb_popup = mkbuf(ts, &popup_s, w, h);
     let mut tb_hover = mkbuf(ts, &hover_s, w, h);
     let mut tb_comp = mkbuf(ts, &comp_s, w, h);
@@ -620,8 +622,8 @@ pub fn draw_content(
         ),
         (&mut tb_gutter, 0.0, ch, theme.gutter_fg),
         (&mut tb_body, l.gutter_cols as f32 * cw, ch, theme.fg),
-        (&mut tb_status, 0.0, h - ch, theme.fg),
-        (&mut tb_err, cw, h - ch, theme.error),
+        (&mut tb_msg, 0.0, h - ch, left_color),
+        (&mut tb_ruler, right_x as f32 * cw, h - ch, theme.fg),
     ];
     let mut oareas: Vec<(&mut Buffer, f32, f32, u32)> = Vec::new();
     if popup_open {
@@ -774,6 +776,10 @@ fn mkbuf(ts: &mut TextSystem, s: &str, w: f32, h: f32) -> Buffer {
     }
     b.shape_until_scroll(&mut ts.font_system, false);
     b
+}
+
+fn fit(s: &str, room: usize) -> String {
+    s.chars().take(room).collect()
 }
 
 #[cfg(test)]
