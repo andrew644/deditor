@@ -10,19 +10,23 @@ pub fn on_key(ed: &mut Editor, ev: &KeyEvent, mods: ModifiersState) {
     if ev.state == ElementState::Released {
         return;
     }
+    key_down(ed, &ev.logical_key, mods);
+}
+
+fn key_down(ed: &mut Editor, key: &Key, mods: ModifiersState) {
     if ed.panel != crate::fuzzy::Panel::None {
-        panel_key(ed, ev, mods);
+        panel_key(ed, key, mods);
         return;
     }
     match ed.mode {
-        Mode::Insert => insert_key(ed, ev, mods),
-        Mode::Command(_) => command_key(ed, ev, mods),
-        Mode::Normal | Mode::Visual => normal_key(ed, ev, mods),
+        Mode::Insert => insert_key(ed, key, mods),
+        Mode::Command(_) => command_key(ed, key, mods),
+        Mode::Normal | Mode::Visual => normal_key(ed, key, mods),
     }
 }
 
-fn key_char(ev: &KeyEvent) -> Option<&'static str> {
-    match &ev.logical_key {
+fn key_char(key: &Key) -> Option<&'static str> {
+    match key {
         Key::Character(s) => s.as_str().chars().next().and_then(leak_char),
         _ => None,
     }
@@ -90,12 +94,12 @@ fn leak_char(c: char) -> Option<&'static str> {
     })
 }
 
-fn normal_key(ed: &mut Editor, ev: &KeyEvent, mods: ModifiersState) {
+fn normal_key(ed: &mut Editor, key: &Key, mods: ModifiersState) {
     if mods.alt_key() || mods.super_key() {
         return;
     }
     ed.lsp.hover = None;
-    if ev.logical_key == Key::Named(NamedKey::Escape) {
+    if *key == Key::Named(NamedKey::Escape) {
         ed.clear_pending();
         if ed.mode == Mode::Visual {
             ed.mode = Mode::Normal;
@@ -103,7 +107,7 @@ fn normal_key(ed: &mut Editor, ev: &KeyEvent, mods: ModifiersState) {
         }
         return;
     }
-    let k = key_char(ev);
+    let k = key_char(key);
     if mods.control_key() {
         match k {
             Some("u") => ed.run_motion(Motion::HalfPageUp, 1),
@@ -148,7 +152,7 @@ fn normal_key(ed: &mut Editor, ev: &KeyEvent, mods: ModifiersState) {
         }
         Pending::F { forward, to } => {
             ed.pending = Pending::None;
-            if let Some(s) = plain_char(ev) {
+            if let Some(s) = key_text(key) {
                 ed.count = 0;
                 let dir = match (forward, to) {
                     (true, true) => FindDir::F,
@@ -165,7 +169,7 @@ fn normal_key(ed: &mut Editor, ev: &KeyEvent, mods: ModifiersState) {
         }
         Pending::R => {
             ed.pending = Pending::None;
-            if let Some(s) = plain_char(ev) {
+            if let Some(s) = key_text(key) {
                 ed.replace_char(s);
             }
             ed.count = 0;
@@ -211,7 +215,7 @@ fn normal_key(ed: &mut Editor, ev: &KeyEvent, mods: ModifiersState) {
     }
     let Some(k) = k else { return };
     if ed.mode == Mode::Visual {
-        visual_key(ed, ev, k, count);
+        visual_key(ed, k, count);
         return;
     }
     match k {
@@ -317,8 +321,7 @@ fn normal_key(ed: &mut Editor, ev: &KeyEvent, mods: ModifiersState) {
     ed.buf_mut().clamp();
 }
 
-fn visual_key(ed: &mut Editor, ev: &KeyEvent, k: &str, count: u32) {
-    let _ = ev;
+fn visual_key(ed: &mut Editor, k: &str, count: u32) {
     match k {
         "v" => {
             ed.mode = Mode::Normal;
@@ -370,13 +373,13 @@ fn visual_key(ed: &mut Editor, ev: &KeyEvent, k: &str, count: u32) {
     ed.count = 0;
 }
 
-fn insert_key(ed: &mut Editor, ev: &KeyEvent, mods: ModifiersState) {
+fn insert_key(ed: &mut Editor, key: &Key, mods: ModifiersState) {
     if mods.alt_key() || mods.super_key() {
         return;
     }
     let popup = ed.lsp.completion.is_some();
     if mods.control_key() {
-        match key_char(ev) {
+        match key_char(key) {
             Some("c") | Some("[") => ed.leave_insert(),
             Some("n") if popup => ed.comp_next(),
             Some("p") if popup => ed.comp_prev(),
@@ -385,7 +388,7 @@ fn insert_key(ed: &mut Editor, ev: &KeyEvent, mods: ModifiersState) {
         }
         return;
     }
-    match &ev.logical_key {
+    match key {
         Key::Named(NamedKey::Escape) if popup => ed.comp_cancel(),
         Key::Named(NamedKey::Enter) if popup => ed.comp_accept(),
         Key::Named(NamedKey::Tab) if popup => ed.comp_accept(),
@@ -413,14 +416,20 @@ fn insert_key(ed: &mut Editor, ev: &KeyEvent, mods: ModifiersState) {
                 ed.buf_mut().insert_text(s, co);
                 ed.maybe_completion(s);
             }
+        Key::Named(NamedKey::Space) => {
+            let co = ed.coalesce_open;
+            ed.buf_mut().insert_text(" ", co);
+            ed.maybe_completion(" ");
+        }
         _ => {}
     }
     ed.buf_mut().clamp();
 }
 
-fn plain_char(ev: &KeyEvent) -> Option<char> {
-    match &ev.logical_key {
+fn key_text(key: &Key) -> Option<char> {
+    match key {
         Key::Character(s) => s.chars().next().filter(|c| !c.is_control()),
+        Key::Named(NamedKey::Space) => Some(' '),
         _ => None,
     }
 }
@@ -526,9 +535,9 @@ fn insert_tab(ed: &mut Editor) {
     ed.buf_mut().insert_text(&" ".repeat(pad), co);
 }
 
-fn command_key(ed: &mut Editor, ev: &KeyEvent, mods: ModifiersState) {
+fn command_key(ed: &mut Editor, key: &Key, mods: ModifiersState) {
     if mods.control_key() {
-        match key_char(ev) {
+        match key_char(key) {
             Some("c") | Some("[") => ed.close_cmdline(),
             _ => {}
         }
@@ -537,7 +546,7 @@ fn command_key(ed: &mut Editor, ev: &KeyEvent, mods: ModifiersState) {
     if mods.alt_key() || mods.super_key() {
         return;
     }
-    match &ev.logical_key {
+    match key {
         Key::Named(NamedKey::Escape) => ed.close_cmdline(),
         Key::Named(NamedKey::Enter) => match ed.cmd_kind {
             Some(crate::mode::CmdKind::Ex) => ed.execute_cmdline(),
@@ -554,13 +563,14 @@ fn command_key(ed: &mut Editor, ev: &KeyEvent, mods: ModifiersState) {
                     ed.cmdline.push(c);
                 }
         }
+        Key::Named(NamedKey::Space) => ed.cmdline.push(' '),
         _ => {}
     }
 }
 
-fn panel_key(ed: &mut Editor, ev: &KeyEvent, mods: ModifiersState) {
+fn panel_key(ed: &mut Editor, key: &Key, mods: ModifiersState) {
     if mods.control_key() {
-        match key_char(ev) {
+        match key_char(key) {
             Some("c") | Some("[") | Some("]") => ed.close_panel(),
             Some("p") => ed.open_panel(crate::fuzzy::Panel::Files),
             Some("b") => ed.open_panel(crate::fuzzy::Panel::Buffers),
@@ -572,7 +582,7 @@ fn panel_key(ed: &mut Editor, ev: &KeyEvent, mods: ModifiersState) {
     if mods.alt_key() || mods.super_key() {
         return;
     }
-    match &ev.logical_key {
+    match key {
         Key::Named(NamedKey::Escape) => ed.close_panel(),
         Key::Named(NamedKey::Enter) => ed.panel_accept(),
         Key::Named(NamedKey::Backspace) => ed.panel_backspace(),
@@ -584,6 +594,71 @@ fn panel_key(ed: &mut Editor, ev: &KeyEvent, mods: ModifiersState) {
                     ed.panel_type(c);
                 }
         }
+        Key::Named(NamedKey::Space) => ed.panel_type(' '),
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mode::CmdKind;
+
+    fn type_keys(ed: &mut Editor, keys: &[Key]) {
+        for k in keys {
+            key_down(ed, k, ModifiersState::empty());
+        }
+    }
+
+    #[test]
+    fn space_inserts_in_insert_mode() {
+        let mut ed = Editor::new(None);
+        ed.buf_mut().insert_text("ab", false);
+        ed.buf_mut().cursor = Pos { line: 0, col: 1 };
+        ed.enter_insert();
+        type_keys(
+            &mut ed,
+            &[
+                Key::Named(NamedKey::Space),
+                Key::Character("x".into()),
+            ],
+        );
+        assert_eq!(ed.buf().rope.to_string(), "a xb");
+        assert_eq!(ed.buf().cursor, Pos { line: 0, col: 3 });
+    }
+
+    #[test]
+    fn space_types_in_cmdline_and_panel_query() {
+        let mut ed = Editor::new(None);
+        ed.open_cmdline(CmdKind::Ex);
+        type_keys(
+            &mut ed,
+            &[
+                Key::Character("e".into()),
+                Key::Named(NamedKey::Space),
+                Key::Character("n".into()),
+                Key::Character("o".into()),
+                Key::Named(NamedKey::Space),
+                Key::Character("x".into()),
+            ],
+        );
+        assert_eq!(ed.cmdline, "e no x");
+
+        ed.open_panel(crate::fuzzy::Panel::Buffers);
+        type_keys(&mut ed, &[Key::Named(NamedKey::Space)]);
+        assert_eq!(ed.panel_query, " ");
+    }
+
+    #[test]
+    fn space_is_a_find_and_replace_target() {
+        let mut ed = Editor::new(None);
+        ed.buf_mut().insert_text("a b", false);
+        ed.buf_mut().cursor = Pos { line: 0, col: 0 };
+        type_keys(&mut ed, &[Key::Character("f".into()), Key::Named(NamedKey::Space)]);
+        assert_eq!(ed.buf().cursor, Pos { line: 0, col: 1 });
+        assert_eq!(ed.last_find, Some((FindDir::F, ' ')));
+        type_keys(&mut ed, &[Key::Character("l".into())]);
+        type_keys(&mut ed, &[Key::Character("r".into()), Key::Named(NamedKey::Space)]);
+        assert_eq!(ed.buf().rope.to_string(), "a  ");
     }
 }
