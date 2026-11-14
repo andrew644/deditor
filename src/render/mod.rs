@@ -249,6 +249,7 @@ pub fn draw_content(
     let theme = &ed.theme;
     let buf = ed.buf();
     let mut rects: Vec<rects::RectInstance> = Vec::new();
+    let mut overlay: Vec<rects::RectInstance> = Vec::new();
     rects.push(rects::RectInstance {
         x: 0.0,
         y: 0.0,
@@ -511,7 +512,7 @@ pub fn draw_content(
         let hx = (l.gutter_cols as f32 * cw + 10.0 * cw).min(w - hw);
         let hy = (row * ch + ch).min(h - (nrows + 1.0) * ch);
         hover_pos = Some((hx, hy));
-        rects.push(rects::RectInstance {
+        overlay.push(rects::RectInstance {
             x: hx,
             y: hy,
             w: hw,
@@ -549,7 +550,7 @@ pub fn draw_content(
         let cx = ((l.gutter_cols as f32 + cs.col as f32) * cw).min(w - cwid);
         let cy = ((row + 1.0) * ch).min(h - nrows * ch);
         comp_pos = Some((cx, cy, nrows));
-        rects.push(rects::RectInstance {
+        overlay.push(rects::RectInstance {
             x: cx,
             y: cy,
             w: cwid,
@@ -557,7 +558,7 @@ pub fn draw_content(
             color: theme.popup_bg,
         });
         if n > 0 {
-            rects.push(rects::RectInstance {
+            overlay.push(rects::RectInstance {
                 x: cx,
                 y: cy + comp_sel_row as f32 * ch,
                 w: cwid,
@@ -583,7 +584,7 @@ pub fn draw_content(
         }
         let shown = ed.panel_order.len().min(max_rows);
         let pw = (l.cols as f32 * 0.5).max(40.0).min(l.cols as f32) * cw;
-        rects.push(rects::RectInstance {
+        overlay.push(rects::RectInstance {
             x: 0.0,
             y: ch,
             w: pw,
@@ -591,7 +592,7 @@ pub fn draw_content(
             color: theme.popup_bg,
         });
         if !ed.panel_order.is_empty() {
-            rects.push(rects::RectInstance {
+            overlay.push(rects::RectInstance {
                 x: 0.0,
                 y: (1 + ed.panel_cursor.min(shown.saturating_sub(1))) as f32 * ch,
                 w: pw,
@@ -610,7 +611,7 @@ pub fn draw_content(
     let mut tb_hover = mkbuf(ts, &hover_s, w, h);
     let mut tb_comp = mkbuf(ts, &comp_s, w, h);
 
-    let mut areas: Vec<(&mut Buffer, f32, f32, u32)> = vec![
+    let areas: Vec<(&mut Buffer, f32, f32, u32)> = vec![
         (
             &mut tb_tab as &mut Buffer,
             0.0f32,
@@ -622,69 +623,113 @@ pub fn draw_content(
         (&mut tb_status, 0.0, h - ch, theme.fg),
         (&mut tb_err, cw, h - ch, theme.error),
     ];
+    let mut oareas: Vec<(&mut Buffer, f32, f32, u32)> = Vec::new();
     if popup_open {
-        areas.push((&mut tb_popup, cw, ch, theme.popup_fg));
+        oareas.push((&mut tb_popup, cw, ch, theme.popup_fg));
     }
     if let Some((hx, hy)) = hover_pos {
-        areas.push((&mut tb_hover, hx, hy, theme.popup_fg));
+        oareas.push((&mut tb_hover, hx, hy, theme.popup_fg));
     }
     if let Some((cx, cy, _)) = comp_pos {
-        areas.push((&mut tb_comp, cx, cy, theme.popup_fg));
+        oareas.push((&mut tb_comp, cx, cy, theme.popup_fg));
     }
-    {
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: None,
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-        rp.draw(
-            &gpu.device,
-            &gpu.queue,
-            &mut pass,
-            gpu.config.width,
-            gpu.config.height,
-            &rects,
+    draw_layer(
+        gpu,
+        ts,
+        rp,
+        encoder,
+        view,
+        Layer {
+            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+            rects,
+            areas,
+        },
+    );
+    if !overlay.is_empty() || !oareas.is_empty() {
+        draw_layer(
+            gpu,
+            ts,
+            rp,
+            encoder,
+            view,
+            Layer {
+                load: wgpu::LoadOp::Load,
+                rects: overlay,
+                areas: oareas,
+            },
         );
-        ts.renderer
-            .prepare(
-                &gpu.device,
-                &gpu.queue,
-                &mut ts.font_system,
-                &mut ts.atlas,
-                &ts.viewport,
-                areas.into_iter().map(|(b, x, y, color)| glyphon::TextArea {
-                    buffer: b,
-                    left: x,
-                    top: y,
-                    scale: 1.0,
-                    bounds: glyphon::TextBounds {
-                        left: 0,
-                        top: 0,
-                        right: gpu.config.width as i32,
-                        bottom: gpu.config.height as i32,
-                    },
-                    default_color: glyphon::Color(color),
-                    custom_glyphs: &[],
-                }),
-                &mut ts.swash_cache,
-            )
-            .unwrap();
-        ts.renderer
-            .render(&ts.atlas, &ts.viewport, &mut pass)
-            .unwrap();
     }
     ts.atlas.trim();
+}
+
+/// One paint pass: its rects, then its text. Drawing a popup's opaque
+/// background in a later layer is what hides the buffer text underneath it.
+struct Layer<'a> {
+    load: wgpu::LoadOp<wgpu::Color>,
+    rects: Vec<rects::RectInstance>,
+    areas: Vec<(&'a mut Buffer, f32, f32, u32)>,
+}
+
+fn draw_layer(
+    gpu: &Gpu,
+    ts: &mut TextSystem,
+    rp: &mut rects::RectPipeline,
+    encoder: &mut wgpu::CommandEncoder,
+    view: &wgpu::TextureView,
+    layer: Layer<'_>,
+) {
+    let Layer { load, rects, areas } = layer;
+    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: None,
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view,
+            depth_slice: None,
+            resolve_target: None,
+            ops: wgpu::Operations { load, store: wgpu::StoreOp::Store },
+        })],
+        depth_stencil_attachment: None,
+        timestamp_writes: None,
+        occlusion_query_set: None,
+        multiview_mask: None,
+    });
+    rp.draw(
+        &gpu.device,
+        &gpu.queue,
+        &mut pass,
+        gpu.config.width,
+        gpu.config.height,
+        &rects,
+    );
+    if areas.is_empty() {
+        return;
+    }
+    ts.renderer
+        .prepare(
+            &gpu.device,
+            &gpu.queue,
+            &mut ts.font_system,
+            &mut ts.atlas,
+            &ts.viewport,
+            areas.into_iter().map(|(b, x, y, color)| glyphon::TextArea {
+                buffer: b,
+                left: x,
+                top: y,
+                scale: 1.0,
+                bounds: glyphon::TextBounds {
+                    left: 0,
+                    top: 0,
+                    right: gpu.config.width as i32,
+                    bottom: gpu.config.height as i32,
+                },
+                default_color: glyphon::Color(color),
+                custom_glyphs: &[],
+            }),
+            &mut ts.swash_cache,
+        )
+        .unwrap();
+    ts.renderer
+        .render(&ts.atlas, &ts.viewport, &mut pass)
+        .unwrap();
 }
 
 fn pending_label(ed: &crate::app::Editor) -> String {
