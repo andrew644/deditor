@@ -595,7 +595,7 @@ impl Editor {
         if term.is_empty() {
             return;
         }
-        let found = {
+        let (found, report) = {
             let b = self.buf();
             let chars: Vec<char> = b.rope.chars().collect();
             let off = b.offset_of(b.cursor);
@@ -606,15 +606,18 @@ impl Editor {
                 off + 1
             };
             let fold = crate::search::ignore_case(term);
-            crate::search::find_wrap(&chars, &t, start, back, fold)
+            let found = crate::search::find_wrap(&chars, &t, start, back, fold);
+            let report = found.map(|at| crate::search::match_report(&chars, &t, at, fold));
+            (found, report)
         };
-        match found {
-            Some(i) => {
+        match (found, report) {
+            (Some(i), Some((current, total))) => {
                 let p = self.buf().pos_of(i);
                 self.buf_mut().cursor = p;
                 self.buf_mut().clamp();
+                self.set_status(format!("[{current}/{total}]"), false);
             }
-            None => {
+            _ => {
                 self.set_status(format!("Pattern not found: {term}"), true);
             }
         }
@@ -1171,6 +1174,44 @@ mod tests {
         assert_eq!(ed.buf().cursor, Pos { line: 0, col: 4 });
         ed.repeat_search(true);
         assert_eq!(ed.buf().cursor, Pos { line: 0, col: 12 });
+    }
+
+    #[test]
+    fn search_reports_the_match_position_and_total() {
+        let mut ed = ed_with("one two one two one");
+        ed.buf_mut().cursor = Pos { line: 0, col: 0 };
+        ed.search_step("two", false);
+        assert_eq!(ed.status.as_deref(), Some("[1/2]"));
+        ed.search_step("two", false);
+        assert_eq!(ed.status.as_deref(), Some("[2/2]"));
+        ed.search_step("two", false);
+        assert_eq!(ed.buf().cursor, Pos { line: 0, col: 4 });
+        assert_eq!(ed.status.as_deref(), Some("[1/2]"));
+        ed.search = Some("two".to_string());
+        ed.repeat_search(true);
+        assert_eq!(ed.buf().cursor, Pos { line: 0, col: 12 });
+        assert_eq!(ed.status.as_deref(), Some("[2/2]"));
+        ed.search_step("one", true);
+        assert_eq!(ed.status.as_deref(), Some("[2/3]"));
+    }
+
+    #[test]
+    fn match_count_spans_lines() {
+        let mut ed = ed_with("a\nb\na\na");
+        ed.buf_mut().cursor = Pos { line: 0, col: 0 };
+        ed.search_step("a", false);
+        assert_eq!(ed.status.as_deref(), Some("[2/3]"));
+    }
+
+    #[test]
+    fn match_count_follows_case_folding() {
+        let mut ed = ed_with("Alpha ALPHA alpha");
+        ed.buf_mut().cursor = Pos { line: 0, col: 0 };
+        ed.search_step("alpha", false);
+        assert_eq!(ed.status.as_deref(), Some("[2/3]"));
+        ed.buf_mut().cursor = Pos { line: 0, col: 0 };
+        ed.search_step("ALPHA", false);
+        assert_eq!(ed.status.as_deref(), Some("[1/1]"));
     }
 
     #[test]

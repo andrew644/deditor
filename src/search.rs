@@ -44,6 +44,23 @@ pub fn find_wrap(
     }
 }
 
+pub fn match_report(chars: &[char], term: &[char], at: usize, fold: bool) -> (usize, usize) {
+    if term.is_empty() || chars.len() < term.len() {
+        return (0, 0);
+    }
+    let mut total = 0;
+    let mut current = 0;
+    for i in 0..=(chars.len() - term.len()) {
+        if matches_at(chars, term, i, fold) {
+            total += 1;
+            if i <= at {
+                current += 1;
+            }
+        }
+    }
+    (current, total)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -95,6 +112,28 @@ mod tests {
         assert_eq!(locate("xxxxx x ALPHA", "alpha", 1, true), Some(8));
         assert_eq!(locate("xxxxx x ALPHA", "ALPHA", 1, true), Some(8));
         assert_eq!(locate("xxxxx x alpha", "ALPHA", 1, true), None);
+    }
+
+    #[test]
+    fn report_numbers_the_current_match_within_the_total() {
+        let aaaa = chars("aaaa");
+        let aa = chars("aa");
+        assert_eq!(match_report(&aaaa, &aa, 0, false), (1, 3));
+        assert_eq!(match_report(&aaaa, &aa, 2, false), (3, 3));
+
+        let mixed = chars("Alpha ALPHA alpha");
+        let lower = chars("alpha");
+        let exact = chars("ALPHA");
+        assert_eq!(match_report(&mixed, &lower, 6, true), (2, 3));
+        assert_eq!(match_report(&mixed, &lower, 12, true), (3, 3));
+        assert_eq!(match_report(&mixed, &exact, 6, false), (1, 1));
+        assert_eq!(match_report(&mixed, &exact, 6, true), (2, 3));
+
+        let nothing = chars("abc");
+        let zzz = chars("zzz");
+        assert_eq!(match_report(&nothing, &zzz, 0, true), (0, 0));
+        assert_eq!(match_report(&nothing, &chars(""), 0, true), (0, 0));
+        assert_eq!(match_report(&chars(""), &aa, 0, true), (0, 0));
     }
 
     #[test]
