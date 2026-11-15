@@ -300,11 +300,12 @@ fn normal_key(ed: &mut Editor, key: &Key, mods: ModifiersState) {
             ed.new_line_above();
             ed.count = 0;
         }
-        "i" => {
-            ed.pending = Pending::TextObj { op: Operator::Change, inner: true };
-        }
+        "i" => ed.enter_insert(),
         "a" => {
-            ed.pending = Pending::TextObj { op: Operator::Change, inner: false };
+            let c = ed.buf().cursor;
+            let len = line_chars(&ed.buf().rope, c.line);
+            ed.buf_mut().cursor = Pos { line: c.line, col: (c.col + 1).min(len) };
+            ed.enter_insert();
         }
         "I" => {
             ed.run_motion(Motion::Caret, 1);
@@ -422,6 +423,11 @@ fn insert_key(ed: &mut Editor, key: &Key, mods: ModifiersState) {
             ed.comp_cancel();
             insert_tab(ed);
         }
+        Key::Named(NamedKey::Space) => {
+            let co = ed.coalesce_open;
+            ed.buf_mut().insert_text(" ", co);
+            ed.maybe_completion(" ");
+        }
         Key::Character(s)
             if s.chars().next().is_some_and(|c| !c.is_control()) => {
                 if let Some(ch) = s.chars().next() {
@@ -431,11 +437,6 @@ fn insert_key(ed: &mut Editor, key: &Key, mods: ModifiersState) {
                 ed.buf_mut().insert_text(s, co);
                 ed.maybe_completion(s);
             }
-        Key::Named(NamedKey::Space) => {
-            let co = ed.coalesce_open;
-            ed.buf_mut().insert_text(" ", co);
-            ed.maybe_completion(" ");
-        }
         _ => {}
     }
     ed.buf_mut().clamp();
@@ -640,6 +641,67 @@ mod tests {
         );
         assert_eq!(ed.buf().rope.to_string(), "a xb");
         assert_eq!(ed.buf().cursor, Pos { line: 0, col: 3 });
+    }
+
+    #[test]
+    fn insert_and_append_place_the_cursor_like_vim() {
+        let mut ed = Editor::new(None);
+        ed.buf_mut().insert_text("ab\n", false);
+        ed.buf_mut().cursor = Pos { line: 0, col: 1 };
+        type_keys(&mut ed, &[Key::Character("i".into())]);
+        assert_eq!(ed.mode, Mode::Insert);
+        type_keys(&mut ed, &[Key::Character("x".into())]);
+        assert_eq!(ed.buf().rope.to_string(), "axb\n");
+
+        type_keys(&mut ed, &[Key::Named(NamedKey::Escape)]);
+        type_keys(&mut ed, &[Key::Character("a".into())]);
+        assert_eq!(ed.mode, Mode::Insert);
+        type_keys(&mut ed, &[Key::Character("y".into())]);
+        assert_eq!(ed.buf().rope.to_string(), "axby\n");
+
+        type_keys(&mut ed, &[Key::Named(NamedKey::Escape)]);
+        ed.buf_mut().cursor = Pos { line: 0, col: 4 };
+        type_keys(
+            &mut ed,
+            &[
+                Key::Character("a".into()),
+                Key::Character("z".into()),
+                Key::Named(NamedKey::Escape),
+            ],
+        );
+        assert_eq!(ed.buf().rope.to_string(), "axbyz\n");
+        assert_eq!(ed.mode, Mode::Normal);
+    }
+
+    #[test]
+    fn operators_still_take_text_objects() {
+        let mut ed = Editor::new(None);
+        ed.buf_mut().insert_text("let s = \"hi\";\n", false);
+        ed.buf_mut().cursor = Pos { line: 0, col: 9 };
+        type_keys(
+            &mut ed,
+            &[
+                Key::Character("c".into()),
+                Key::Character("i".into()),
+                Key::Character("\"".into()),
+                Key::Character("z".into()),
+            ],
+        );
+        assert_eq!(ed.mode, Mode::Insert);
+        assert_eq!(ed.buf().rope.to_string(), "let s = \"z\";\n");
+
+        type_keys(&mut ed, &[Key::Named(NamedKey::Escape)]);
+        ed.buf_mut().cursor = Pos { line: 0, col: 0 };
+        type_keys(
+            &mut ed,
+            &[
+                Key::Character("d".into()),
+                Key::Character("i".into()),
+                Key::Character("w".into()),
+            ],
+        );
+        assert_eq!(ed.buf().rope.to_string(), " s = \"z\";\n");
+        assert_eq!(ed.mode, Mode::Normal);
     }
 
     #[test]
