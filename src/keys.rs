@@ -32,7 +32,12 @@ fn key_char(key: &Key) -> Option<&'static str> {
     }
 }
 
+const DIGITS: [&str; 10] = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
+
 fn leak_char(c: char) -> Option<&'static str> {
+    if let Some(d) = c.to_digit(10) {
+        return Some(DIGITS[d as usize]);
+    }
     Some(match c {
         'h' => "h",
         'j' => "j",
@@ -68,7 +73,6 @@ fn leak_char(c: char) -> Option<&'static str> {
         'v' => "v",
         'V' => "V",
         'u' => "u",
-        '0' => "0",
         '$' => "$",
         '^' => "^",
         '%' => "%",
@@ -139,6 +143,21 @@ fn normal_key(ed: &mut Editor, key: &Key, mods: ModifiersState) {
             return;
         }
     let count = if ed.count == 0 { 1 } else { ed.count };
+    let page = match key {
+        Key::Named(NamedKey::PageDown) => Some(Motion::PageDown),
+        Key::Named(NamedKey::PageUp) => Some(Motion::PageUp),
+        _ => None,
+    };
+    if let Some(m) = page {
+        if let Pending::Op(op) = ed.pending {
+            ed.pending = Pending::None;
+            ed.operator_motion(op, m, count);
+        } else {
+            ed.run_motion(m, count);
+        }
+        ed.count = 0;
+        return;
+    }
     match ed.pending {
         Pending::G => {
             ed.pending = Pending::None;
@@ -149,8 +168,9 @@ fn normal_key(ed: &mut Editor, key: &Key, mods: ModifiersState) {
                 Some("e") => ed.run_motion(Motion::GE, count),
                 Some("E") => ed.run_motion(Motion::BigGE, count),
                 Some("d") => ed.goto_definition_cur(),
-                _ => ed.count = 0,
+                _ => {}
             }
+            ed.count = 0;
             return;
         }
         Pending::F { forward, to } => {
@@ -326,7 +346,9 @@ fn normal_key(ed: &mut Editor, key: &Key, mods: ModifiersState) {
         }
         _ => {}
     }
-    ed.count = 0;
+    if matches!(ed.pending, Pending::None) {
+        ed.count = 0;
+    }
     ed.buf_mut().clamp();
 }
 
@@ -676,6 +698,7 @@ mod tests {
     #[test]
     fn operators_still_take_text_objects() {
         let mut ed = Editor::new(None);
+        ed.config.clipboard = false;
         ed.buf_mut().insert_text("let s = \"hi\";\n", false);
         ed.buf_mut().cursor = Pos { line: 0, col: 9 };
         type_keys(
@@ -702,6 +725,65 @@ mod tests {
         );
         assert_eq!(ed.buf().rope.to_string(), " s = \"z\";\n");
         assert_eq!(ed.mode, Mode::Normal);
+    }
+
+    #[test]
+    fn page_keys_move_by_the_viewport() {
+        let mut ed = Editor::new(None);
+        ed.config.clipboard = false;
+        let body: String = (0..40).map(|i| format!("line {i}\n")).collect();
+        ed.buf_mut().insert_text(&body, false);
+        ed.view_rows = 10;
+        ed.buf_mut().cursor = Pos { line: 0, col: 3 };
+        type_keys(&mut ed, &[Key::Named(NamedKey::PageDown)]);
+        assert_eq!(ed.buf().cursor, Pos { line: 10, col: 3 });
+        type_keys(&mut ed, &[Key::Named(NamedKey::PageUp)]);
+        assert_eq!(ed.buf().cursor, Pos { line: 0, col: 3 });
+        type_keys(
+            &mut ed,
+            &[
+                Key::Character("2".into()),
+                Key::Named(NamedKey::PageDown),
+            ],
+        );
+        assert_eq!(ed.buf().cursor.line, 20);
+        assert_eq!(ed.count, 0);
+        type_keys(
+            &mut ed,
+            &[
+                Key::Character("d".into()),
+                Key::Named(NamedKey::PageUp),
+            ],
+        );
+        assert_eq!(ed.buf().rope.len_lines(), 30);
+        assert_eq!(ed.buf().rope.line(10).to_string(), "line 21\n");
+        assert_eq!(ed.mode, Mode::Normal);
+    }
+
+    #[test]
+    fn typed_counts_reach_motions_and_operators() {
+        let mut ed = Editor::new(None);
+        ed.config.clipboard = false;
+        ed.buf_mut().insert_text("one two three four\n", false);
+        ed.buf_mut().cursor = Pos { line: 0, col: 0 };
+        type_keys(
+            &mut ed,
+            &[
+                Key::Character("3".into()),
+                Key::Character("w".into()),
+            ],
+        );
+        assert_eq!(ed.buf().cursor, Pos { line: 0, col: 14 });
+        type_keys(
+            &mut ed,
+            &[
+                Key::Character("0".into()),
+                Key::Character("2".into()),
+                Key::Character("d".into()),
+                Key::Character("w".into()),
+            ],
+        );
+        assert_eq!(ed.buf().rope.to_string(), "three four\n");
     }
 
     #[test]

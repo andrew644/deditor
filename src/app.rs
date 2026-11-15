@@ -640,7 +640,17 @@ impl Editor {
             (b.cursor, crate::motions::apply(&b.rope, b.cursor, m, count, &ctx))
         };
         self.prefer_x = None;
-        let linewise = matches!(m, M::LineDown | M::LineUp | M::GG | M::G);
+        let linewise = matches!(
+            m,
+            M::LineDown
+                | M::LineUp
+                | M::GG
+                | M::G
+                | M::PageDown
+                | M::PageUp
+                | M::HalfPageDown
+                | M::HalfPageUp
+        );
         if from == to && !linewise {
             self.clear_pending();
             return;

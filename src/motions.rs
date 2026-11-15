@@ -28,9 +28,6 @@ pub enum Motion {
     HalfPageDown,
     HalfPageUp,
     PageDown,
-    // API-complete counterpart of PageDown; Ctrl-b is taken by the buffers
-    // panel in the default keymap.
-    #[allow(dead_code)]
     PageUp,
     /// Linewise counterpart of `J`, used by operators and linewise visual:
     /// `J`/`K` move by screen rows once lines wrap.
