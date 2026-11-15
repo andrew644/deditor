@@ -312,22 +312,15 @@ impl Editor {
         use mode::Operator as Op;
         let last_line =
             if linewise && b.col == 0 && b.line > a.line { b.line - 1 } else { b.line };
+        if matches!(op, Op::Yank | Op::Delete | Op::Change) {
+            let text =
+                self.buf().rope.slice(self.buf().offset_of(a)..self.buf().offset_of(b)).to_string();
+            self.set_register(text, linewise);
+        }
         match op {
-            Op::Yank => {
-                let s = self.buf().rope.slice(self.buf().offset_of(a)..self.buf().offset_of(b));
-                self.register = s.to_string();
-                self.reg_linewise = linewise;
-                if self.config.clipboard
-                    && let Err(e) = crate::clipboard::set(&self.register)
-                {
-                    self.set_status(format!("Clipboard: {e}"), true);
-                }
-            }
+            Op::Yank => {}
             Op::Delete => {
                 self.buf_mut().delete_text(a, b);
-                if linewise {
-                    self.reg_linewise = true;
-                }
                 let b = self.buf_mut();
                 if linewise && b.cursor.col > line_chars(&b.rope, b.cursor.line) {
                     b.cursor.col = line_chars(&b.rope, b.cursor.line);
@@ -384,6 +377,16 @@ impl Editor {
         if self.mode == Mode::Visual {
             self.mode = Mode::Normal;
             self.visual_anchor = None;
+        }
+    }
+
+    fn set_register(&mut self, text: String, linewise: bool) {
+        self.register = text;
+        self.reg_linewise = linewise;
+        if self.config.clipboard
+            && let Err(e) = crate::clipboard::set(&self.register)
+        {
+            self.set_status(format!("Clipboard: {e}"), true);
         }
     }
 
@@ -1235,6 +1238,42 @@ mod tests {
         ed.buf_mut().cursor = Pos { line: 1, col: 0 };
         ed.paste(true);
         assert_eq!(text(&ed), "a\nb\na\n");
+    }
+
+    #[test]
+    fn delete_line_fills_the_register() {
+        let mut ed = ed_with("one\ntwo\nthree\n");
+        ed.config.clipboard = false;
+        ed.buf_mut().cursor = Pos { line: 1, col: 0 };
+        ed.operator_line(mode::Operator::Delete);
+        assert_eq!(text(&ed), "one\nthree\n");
+        assert_eq!(ed.register, "two\n");
+        assert!(ed.reg_linewise);
+        ed.paste(true);
+        assert_eq!(text(&ed), "one\nthree\ntwo\n");
+    }
+
+    #[test]
+    fn delete_char_fills_the_register() {
+        let mut ed = ed_with("ab\n");
+        ed.config.clipboard = false;
+        ed.buf_mut().cursor = Pos { line: 0, col: 0 };
+        ed.change_char(mode::Operator::Delete);
+        assert_eq!(text(&ed), "b\n");
+        assert_eq!(ed.register, "a");
+        assert!(!ed.reg_linewise);
+    }
+
+    #[test]
+    fn change_line_fills_the_register() {
+        let mut ed = ed_with("keep\ndrop\n");
+        ed.config.clipboard = false;
+        ed.buf_mut().cursor = Pos { line: 1, col: 2 };
+        ed.operator_line(mode::Operator::Change);
+        assert_eq!(ed.mode, Mode::Insert);
+        assert_eq!(ed.register, "drop\n");
+        assert!(ed.reg_linewise);
+        assert_eq!(text(&ed), "keep\n");
     }
 
     #[test]
