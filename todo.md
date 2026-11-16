@@ -1,2 +1,13 @@
 # TODO
-
+- When a pending key like f is pressed and I want to go forward to capital 'P' when I hit shift to get the P key, it ends the pending f press.
+- :590 should jump to line 590.
+- '*' on word should search for word.
+- z z should center the screen
+- :pwd to see what directory we are running in
+- :e new_file_name.txt should create a blank file called file_name.txt in the pwd.
+- lsp stuff should only run in programming files.
+- ctrl-P should do a fuzzy find as the user types a path. So user types ~/ and it will show files in ~/ 
+- Add find and replace command. Like this :r regex/replace_string to change every instance in the file.
+- Create readme with every command in every mode.
+- o on the last line doesn't move the cursor, only creates the new line.
+- dd on the last blank line doesn't delete the line.
