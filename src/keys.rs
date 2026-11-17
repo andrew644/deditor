@@ -820,7 +820,7 @@ mod tests {
 
     #[test]
     fn space_inserts_in_insert_mode() {
-        let mut ed = Editor::new(None);
+        let mut ed = Editor::test_new();
         ed.buf_mut().insert_text("ab", false);
         ed.buf_mut().cursor = Pos { line: 0, col: 1 };
         ed.enter_insert();
@@ -834,7 +834,7 @@ mod tests {
 
     #[test]
     fn insert_and_append_place_the_cursor_like_vim() {
-        let mut ed = Editor::new(None);
+        let mut ed = Editor::test_new();
         ed.buf_mut().insert_text("ab\n", false);
         ed.buf_mut().cursor = Pos { line: 0, col: 1 };
         type_keys(&mut ed, &[Key::Character("i".into())]);
@@ -864,7 +864,7 @@ mod tests {
 
     #[test]
     fn operators_still_take_text_objects() {
-        let mut ed = Editor::new(None);
+        let mut ed = Editor::test_new();
         ed.config.clipboard = false;
         ed.buf_mut().insert_text("let s = \"hi\";\n", false);
         ed.buf_mut().cursor = Pos { line: 0, col: 9 };
@@ -896,7 +896,7 @@ mod tests {
 
     #[test]
     fn page_keys_move_by_the_viewport() {
-        let mut ed = Editor::new(None);
+        let mut ed = Editor::test_new();
         ed.config.clipboard = false;
         let body: String = (0..40).map(|i| format!("line {i}\n")).collect();
         ed.buf_mut().insert_text(&body, false);
@@ -923,7 +923,7 @@ mod tests {
 
     #[test]
     fn zz_centers_the_viewport_on_the_cursor() {
-        let mut ed = Editor::new(None);
+        let mut ed = Editor::test_new();
         let body: String = (0..40).map(|i| format!("line {i}\n")).collect();
         ed.buf_mut().insert_text(&body, false);
         ed.view_rows = 10;
@@ -951,7 +951,7 @@ mod tests {
 
     #[test]
     fn z_then_another_key_leaves_the_view_alone() {
-        let mut ed = Editor::new(None);
+        let mut ed = Editor::test_new();
         let body: String = (0..40).map(|i| format!("line {i}\n")).collect();
         ed.buf_mut().insert_text(&body, false);
         ed.view_rows = 10;
@@ -967,7 +967,7 @@ mod tests {
 
     #[test]
     fn typed_counts_reach_motions_and_operators() {
-        let mut ed = Editor::new(None);
+        let mut ed = Editor::test_new();
         ed.config.clipboard = false;
         ed.buf_mut().insert_text("one two three four\n", false);
         ed.buf_mut().cursor = Pos { line: 0, col: 0 };
@@ -990,7 +990,7 @@ mod tests {
 
     #[test]
     fn open_line_indents_after_an_opening_brace() {
-        let mut ed = Editor::new(None);
+        let mut ed = Editor::test_new();
         ed.config.tab_width = 4;
         ed.buf_mut().insert_text("int main() {\n", false);
         ed.buf_mut().cursor = Pos { line: 0, col: 0 };
@@ -1006,7 +1006,7 @@ mod tests {
 
     #[test]
     fn open_above_copies_the_line_below_indent() {
-        let mut ed = Editor::new(None);
+        let mut ed = Editor::test_new();
         ed.config.tab_width = 4;
         ed.buf_mut().insert_text("    foo();\n", false);
         ed.buf_mut().cursor = Pos { line: 0, col: 2 };
@@ -1014,7 +1014,7 @@ mod tests {
         assert_eq!(ed.buf().cursor, Pos { line: 0, col: 4 });
         assert_eq!(ed.buf().rope.to_string(), "    \n    foo();\n");
 
-        let mut closing = Editor::new(None);
+        let mut closing = Editor::test_new();
         closing.config.tab_width = 4;
         closing.buf_mut().insert_text("    foo();\n    }\n", false);
         closing.buf_mut().cursor = Pos { line: 1, col: 0 };
@@ -1024,7 +1024,7 @@ mod tests {
 
     #[test]
     fn enter_in_insert_mode_repeats_the_indent() {
-        let mut ed = Editor::new(None);
+        let mut ed = Editor::test_new();
         ed.config.tab_width = 4;
         ed.buf_mut().insert_text("    foo();\n", false);
         ed.buf_mut().cursor = Pos { line: 0, col: 10 };
@@ -1039,7 +1039,7 @@ mod tests {
 
     #[test]
     fn typing_a_leading_closing_brace_dedents_the_line() {
-        let mut ed = Editor::new(None);
+        let mut ed = Editor::test_new();
         ed.config.tab_width = 4;
         ed.buf_mut().insert_text("int main() {\n", false);
         ed.buf_mut().cursor = Pos { line: 0, col: 12 };
@@ -1055,7 +1055,7 @@ mod tests {
         assert_eq!(ed.buf().rope.to_string(), "int main() {\n    x\n}\n");
         assert_eq!(ed.buf().cursor, Pos { line: 2, col: 1 });
 
-        let mut mid = Editor::new(None);
+        let mut mid = Editor::test_new();
         mid.config.tab_width = 4;
         mid.buf_mut().insert_text("    x", false);
         mid.buf_mut().cursor = Pos { line: 0, col: 5 };
@@ -1067,7 +1067,7 @@ mod tests {
 
     #[test]
     fn space_types_in_cmdline_and_panel_query() {
-        let mut ed = Editor::new(None);
+        let mut ed = Editor::test_new();
         ed.open_cmdline(CmdKind::Ex);
         type_keys(
             &mut ed,
@@ -1089,7 +1089,7 @@ mod tests {
 
     #[test]
     fn space_is_a_find_and_replace_target() {
-        let mut ed = Editor::new(None);
+        let mut ed = Editor::test_new();
         ed.buf_mut().insert_text("a b", false);
         ed.buf_mut().cursor = Pos { line: 0, col: 0 };
         type_keys(
@@ -1108,7 +1108,7 @@ mod tests {
 
     #[test]
     fn star_key_searches_forward_from_the_cursor() {
-        let mut ed = Editor::new(None);
+        let mut ed = Editor::test_new();
         ed.buf_mut().insert_text("x foo bar foo\n", false);
         ed.buf_mut().cursor = Pos { line: 0, col: 2 };
         type_keys(&mut ed, &[Key::Character("*".into())]);
@@ -1118,7 +1118,7 @@ mod tests {
 
     #[test]
     fn normal_key_clears_the_echo_message() {
-        let mut ed = Editor::new(None);
+        let mut ed = Editor::test_new();
         ed.set_status("E37: No write since last change".to_string(), true);
         type_keys(&mut ed, &[Key::Character("l".into())]);
         assert_eq!(ed.status, None);
@@ -1126,7 +1126,7 @@ mod tests {
 
     #[test]
     fn shift_between_find_and_target_keeps_the_pending_find() {
-        let mut ed = Editor::new(None);
+        let mut ed = Editor::test_new();
         ed.buf_mut().insert_text("onePtwo\n", false);
         ed.buf_mut().cursor = Pos { line: 0, col: 0 };
         type_keys(
@@ -1143,7 +1143,7 @@ mod tests {
 
     #[test]
     fn shift_between_operator_and_motion_still_applies_the_operator() {
-        let mut ed = Editor::new(None);
+        let mut ed = Editor::test_new();
         ed.config.clipboard = false;
         ed.buf_mut().insert_text("one two three\n", false);
         ed.buf_mut().cursor = Pos { line: 0, col: 0 };
@@ -1161,7 +1161,7 @@ mod tests {
 
     #[test]
     fn any_key_press_dismisses_the_context_menu() {
-        let mut ed = Editor::new(None);
+        let mut ed = Editor::test_new();
         ed.buf_mut().insert_text("hello\n", false);
         ed.context_menu = Some("gd   go to definition".to_string());
         type_keys(&mut ed, &[Key::Named(NamedKey::Shift)]);
@@ -1172,7 +1172,7 @@ mod tests {
 
     #[test]
     fn f2_toggles_whitespace_visibility_in_every_mode() {
-        let mut ed = Editor::new(None);
+        let mut ed = Editor::test_new();
         ed.config.show_whitespace = false;
         type_keys(&mut ed, &[Key::Named(NamedKey::F2)]);
         assert!(ed.config.show_whitespace);
@@ -1188,7 +1188,7 @@ mod tests {
 
     #[test]
     fn f3_swaps_theme_to_light_and_back() {
-        let mut ed = Editor::new(None);
+        let mut ed = Editor::test_new();
         ed.config.theme = crate::config::Theme::default();
         ed.theme = crate::config::RgbTheme::from_theme_checked(&ed.config.theme).0;
         let dark_cfg = ed.config.theme.clone();
@@ -1205,7 +1205,7 @@ mod tests {
 
     #[test]
     fn ctrl_v_enters_and_leaves_block_visual() {
-        let mut ed = Editor::new(None);
+        let mut ed = Editor::test_new();
         ed.buf_mut().insert_text("alpha\nbeta\n", false);
         ed.buf_mut().cursor = Pos { line: 0, col: 0 };
         key_down(
@@ -1230,7 +1230,7 @@ mod tests {
 
     #[test]
     fn block_yank_pads_short_lines_into_the_register() {
-        let mut ed = Editor::new(None);
+        let mut ed = Editor::test_new();
         ed.config.clipboard = false;
         ed.buf_mut().insert_text("alpha\nbeta\ngamma\n", false);
         ed.buf_mut().cursor = Pos { line: 0, col: 1 };
@@ -1250,7 +1250,7 @@ mod tests {
 
     #[test]
     fn block_delete_clamps_to_short_lines() {
-        let mut ed = Editor::new(None);
+        let mut ed = Editor::test_new();
         ed.config.clipboard = false;
         ed.buf_mut().insert_text("alpha\nx\nb\ngamma\n", false);
         ed.buf_mut().cursor = Pos { line: 0, col: 1 };
@@ -1268,7 +1268,7 @@ mod tests {
 
     #[test]
     fn block_paste_inserts_each_segment_on_its_line() {
-        let mut ed = Editor::new(None);
+        let mut ed = Editor::test_new();
         ed.config.clipboard = false;
         ed.buf_mut().insert_text("aaa\nbbb\nccc\n", false);
         ed.buf_mut().cursor = Pos { line: 0, col: 0 };
@@ -1280,7 +1280,7 @@ mod tests {
 
     #[test]
     fn block_paste_pads_lines_shorter_than_the_column() {
-        let mut ed = Editor::new(None);
+        let mut ed = Editor::test_new();
         ed.config.clipboard = false;
         ed.buf_mut().insert_text("q\nx\n", false);
         ed.buf_mut().cursor = Pos { line: 0, col: 2 };
@@ -1292,7 +1292,7 @@ mod tests {
 
     #[test]
     fn block_change_yanks_the_block_and_enters_insert() {
-        let mut ed = Editor::new(None);
+        let mut ed = Editor::test_new();
         ed.config.clipboard = false;
         ed.buf_mut().insert_text("alpha\nbeta\n", false);
         ed.register = "keep".into();
@@ -1311,7 +1311,7 @@ mod tests {
 
     #[test]
     fn v_converts_block_to_charwise_and_escape_exits() {
-        let mut ed = Editor::new(None);
+        let mut ed = Editor::test_new();
         ed.buf_mut().insert_text("alpha\nbeta\n", false);
         ed.buf_mut().cursor = Pos { line: 0, col: 1 };
         key_down(
@@ -1331,7 +1331,7 @@ mod tests {
 
     #[test]
     fn operator_capital_g_deletes_to_end_of_file() {
-        let mut ed = Editor::new(None);
+        let mut ed = Editor::test_new();
         ed.config.clipboard = false;
         ed.buf_mut().insert_text("one\ntwo\nthree\n", false);
         ed.buf_mut().cursor = Pos { line: 1, col: 0 };
@@ -1345,7 +1345,7 @@ mod tests {
 
     #[test]
     fn operator_gg_deletes_to_first_line() {
-        let mut ed = Editor::new(None);
+        let mut ed = Editor::test_new();
         ed.config.clipboard = false;
         ed.buf_mut().insert_text("one\ntwo\nthree\n", false);
         ed.buf_mut().cursor = Pos { line: 1, col: 0 };
@@ -1372,7 +1372,7 @@ mod tests {
 
     #[test]
     fn operator_g_then_other_key_cancels() {
-        let mut ed = Editor::new(None);
+        let mut ed = Editor::test_new();
         ed.config.clipboard = false;
         ed.buf_mut().insert_text("one\ntwo\n", false);
         type_keys(
@@ -1389,7 +1389,7 @@ mod tests {
 
     #[test]
     fn f1_toggles_spellcheck() {
-        let mut ed = Editor::new(None);
+        let mut ed = Editor::test_new();
         assert!(!ed.config.spellcheck);
         type_keys(&mut ed, &[Key::Named(NamedKey::F1)]);
         assert!(ed.config.spellcheck);
@@ -1401,7 +1401,7 @@ mod tests {
 
     #[test]
     fn comma_repeats_find_in_reverse() {
-        let mut ed = Editor::new(None);
+        let mut ed = Editor::test_new();
         ed.config.clipboard = false;
         ed.buf_mut().insert_text("a b a b a\n", false);
         ed.buf_mut().cursor = Pos { line: 0, col: 0 };
@@ -1420,7 +1420,7 @@ mod tests {
 
     #[test]
     fn double_gt_and_lt_indent_a_line() {
-        let mut ed = Editor::new(None);
+        let mut ed = Editor::test_new();
         ed.config.clipboard = false;
         ed.buf_mut().insert_text("hello\n", false);
         ed.buf_mut().cursor = Pos { line: 0, col: 0 };
@@ -1438,7 +1438,7 @@ mod tests {
 
     #[test]
     fn hash_key_searches_word_backward() {
-        let mut ed = Editor::new(None);
+        let mut ed = Editor::test_new();
         ed.config.clipboard = false;
         ed.buf_mut().insert_text("bar x bar", false);
         ed.buf_mut().cursor = Pos { line: 0, col: 6 };
@@ -1448,7 +1448,7 @@ mod tests {
 
     #[test]
     fn d_zero_deletes_to_line_start() {
-        let mut ed = Editor::new(None);
+        let mut ed = Editor::test_new();
         ed.config.clipboard = false;
         ed.buf_mut().insert_text("hello\n", false);
         ed.buf_mut().cursor = Pos { line: 0, col: 2 };
@@ -1464,7 +1464,7 @@ mod tests {
 
     #[test]
     fn digits_work_as_find_and_replace_targets() {
-        let mut ed = Editor::new(None);
+        let mut ed = Editor::test_new();
         ed.config.clipboard = false;
         ed.buf_mut().insert_text("a1b2\n", false);
         ed.buf_mut().cursor = Pos { line: 0, col: 0 };
@@ -1482,7 +1482,7 @@ mod tests {
 
     #[test]
     fn count_repeats_paste() {
-        let mut ed = Editor::new(None);
+        let mut ed = Editor::test_new();
         ed.config.clipboard = false;
         ed.buf_mut().insert_text("abcd\n", false);
         ed.buf_mut().cursor = Pos { line: 0, col: 0 };
@@ -1496,7 +1496,7 @@ mod tests {
 
     #[test]
     fn count_replaces_several_chars() {
-        let mut ed = Editor::new(None);
+        let mut ed = Editor::test_new();
         ed.config.clipboard = false;
         ed.buf_mut().insert_text("abcd\n", false);
         ed.buf_mut().cursor = Pos { line: 0, col: 0 };
@@ -1514,7 +1514,7 @@ mod tests {
 
     #[test]
     fn count_deletes_several_chars() {
-        let mut ed = Editor::new(None);
+        let mut ed = Editor::test_new();
         ed.config.clipboard = false;
         ed.buf_mut().insert_text("abcd\n", false);
         ed.buf_mut().cursor = Pos { line: 0, col: 0 };
@@ -1527,7 +1527,7 @@ mod tests {
 
     #[test]
     fn closing_bracket_text_objects_work() {
-        let mut ed = Editor::new(None);
+        let mut ed = Editor::test_new();
         ed.config.clipboard = false;
         ed.buf_mut().insert_text("(abc)\n", false);
         ed.buf_mut().cursor = Pos { line: 0, col: 2 };
@@ -1544,7 +1544,7 @@ mod tests {
 
     #[test]
     fn visual_change_enters_insert_mode() {
-        let mut ed = Editor::new(None);
+        let mut ed = Editor::test_new();
         ed.config.clipboard = false;
         ed.buf_mut().insert_text("hello\n", false);
         ed.buf_mut().cursor = Pos { line: 0, col: 0 };
@@ -1562,7 +1562,7 @@ mod tests {
 
     #[test]
     fn esc_from_cmdline_clears_count() {
-        let mut ed = Editor::new(None);
+        let mut ed = Editor::test_new();
         ed.config.clipboard = false;
         ed.buf_mut().insert_text("one two three\n", false);
         ed.buf_mut().cursor = Pos { line: 0, col: 0 };
@@ -1576,7 +1576,7 @@ mod tests {
 
     #[test]
     fn count_g_jumps_to_line() {
-        let mut ed = Editor::new(None);
+        let mut ed = Editor::test_new();
         ed.config.clipboard = false;
         ed.buf_mut().insert_text("l1\nl2\nl3\nl4\nl5\nl6", false);
         type_keys(&mut ed, &["5", "G"].map(|s| Key::Character(s.into())));
@@ -1591,7 +1591,7 @@ mod tests {
 
     #[test]
     fn di_quote_with_cursor_on_closing_quote() {
-        let mut ed = Editor::new(None);
+        let mut ed = Editor::test_new();
         ed.config.clipboard = false;
         ed.buf_mut().insert_text("hi \"bob\" ok", false);
         ed.buf_mut().cursor = Pos { line: 0, col: 7 };
@@ -1603,7 +1603,7 @@ mod tests {
 
     #[test]
     fn d_count_g_deletes_whole_lines() {
-        let mut ed = Editor::new(None);
+        let mut ed = Editor::test_new();
         ed.config.clipboard = false;
         ed.buf_mut()
             .insert_text("one\ntwo\nthree\nfour\nfive\n", false);
@@ -1616,7 +1616,7 @@ mod tests {
 
     #[test]
     fn x_deletes_last_char_of_line() {
-        let mut ed = Editor::new(None);
+        let mut ed = Editor::test_new();
         ed.config.clipboard = false;
         ed.buf_mut().insert_text("abcd", false);
         ed.buf_mut().cursor = Pos { line: 0, col: 3 };
@@ -1627,7 +1627,7 @@ mod tests {
 
     #[test]
     fn x_count_clamps_at_line_end() {
-        let mut ed = Editor::new(None);
+        let mut ed = Editor::test_new();
         ed.config.clipboard = false;
         ed.buf_mut().insert_text("abcd", false);
         ed.buf_mut().cursor = Pos { line: 0, col: 1 };
@@ -1637,7 +1637,7 @@ mod tests {
 
     #[test]
     fn d_dollar_on_last_char_deletes_it() {
-        let mut ed = Editor::new(None);
+        let mut ed = Editor::test_new();
         ed.config.clipboard = false;
         ed.buf_mut().insert_text("ab", false);
         ed.buf_mut().cursor = Pos { line: 0, col: 1 };
@@ -1647,7 +1647,7 @@ mod tests {
 
     #[test]
     fn ci_quote_targets_second_string_opener() {
-        let mut ed = Editor::new(None);
+        let mut ed = Editor::test_new();
         ed.config.clipboard = false;
         ed.buf_mut().insert_text("foo(\"a\", \"b\")", false);
         ed.buf_mut().cursor = Pos { line: 0, col: 9 };
@@ -1658,7 +1658,7 @@ mod tests {
 
     #[test]
     fn empty_text_object_keeps_register() {
-        let mut ed = Editor::new(None);
+        let mut ed = Editor::test_new();
         ed.config.clipboard = false;
         ed.buf_mut().insert_text("x = \"\"", false);
         ed.register = "keep".into();

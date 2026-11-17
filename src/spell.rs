@@ -145,12 +145,14 @@ mod tests {
         if Command::new("hunspell").arg("-D").output().is_err() {
             return;
         }
-        let dir = std::env::temp_dir().join("deditor-spell-test-dict");
+        let dir =
+            std::env::temp_dir().join(format!("deditor-spell-test-dict-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("testdict.aff"), "SET UTF-8\n").unwrap();
         std::fs::write(dir.join("testdict.dic"), "3\nhello\nworld\nmistaked\n").unwrap();
         let dict = dir.join("testdict").display().to_string();
         let words = run_hunspell("hello mistaked blorp world zorp\n", &dict);
+        std::fs::remove_dir_all(&dir).unwrap();
         assert_eq!(words, vec!["blorp".to_string(), "zorp".to_string()]);
         let missing = run_hunspell("anything\n", "/nonexistent/dict");
         assert!(missing.is_empty());

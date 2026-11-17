@@ -156,6 +156,16 @@ impl Editor {
         ed
     }
 
+    #[cfg(test)]
+    pub fn test_new() -> Self {
+        let mut ed = Self::new(None);
+        ed.config = crate::config::Config::default();
+        let (theme, _) = RgbTheme::from_theme_checked(&ed.config.theme);
+        ed.theme = theme;
+        ed.status = None;
+        ed
+    }
+
     pub fn buf(&self) -> &Buffer {
         &self.buffers[self.active]
     }
@@ -1717,7 +1727,7 @@ mod tests {
     use crate::textobjects::Obj;
 
     fn ed_with(s: &str) -> Editor {
-        let mut ed = Editor::new(None);
+        let mut ed = Editor::test_new();
         ed.buf_mut().insert_text(s, false);
         ed
     }
@@ -1948,7 +1958,7 @@ mod tests {
 
     #[test]
     fn close_active_tab_keeps_neighbor_and_last_close_starts_fresh() {
-        let mut ed = Editor::new(None);
+        let mut ed = Editor::test_new();
         ed.buffers[0] = Buffer::new_file(std::path::Path::new("/tmp/deditor_tab_a"));
         ed.buffers
             .push(Buffer::new_file(std::path::Path::new("/tmp/deditor_tab_b")));
@@ -1978,7 +1988,7 @@ mod tests {
 
     #[test]
     fn close_tab_by_number_targets_that_tab() {
-        let mut ed = Editor::new(None);
+        let mut ed = Editor::test_new();
         ed.buffers[0] = Buffer::new_file(std::path::Path::new("/tmp/deditor_tab_a"));
         ed.buffers
             .push(Buffer::new_file(std::path::Path::new("/tmp/deditor_tab_b")));
@@ -1995,13 +2005,13 @@ mod tests {
 
     #[test]
     fn pos_at_cell_maps_screen_cells_through_wraps() {
-        let mut ed = Editor::new(None);
+        let mut ed = Editor::test_new();
         let body: String = (0..10).map(|i| format!("line {i}\n")).collect();
         ed.buf_mut().insert_text(&body, false);
         assert_eq!(ed.pos_at_cell(0, 0), Pos { line: 0, col: 0 });
         assert_eq!(ed.pos_at_cell(3, 4), Pos { line: 3, col: 4 });
         assert_eq!(ed.pos_at_cell(1, 100), Pos { line: 1, col: 5 });
-        let mut wide = Editor::new(None);
+        let mut wide = Editor::test_new();
         wide.buf_mut().insert_text(&"x".repeat(200), false);
         assert_eq!(wide.pos_at_cell(2, 5), Pos { line: 0, col: 165 });
     }
@@ -2076,7 +2086,7 @@ mod tests {
         std::fs::write(dir.join("other.txt"), "x\n").unwrap();
         let saved = std::env::current_dir().unwrap();
         std::env::set_current_dir(&dir).unwrap();
-        let mut ed = Editor::new(None);
+        let mut ed = Editor::test_new();
         ed.open_panel(crate::fuzzy::Panel::Files);
         assert_eq!(
             ed.panel_items,
@@ -2609,7 +2619,7 @@ mod tests {
 
     #[test]
     fn close_buffer_shifts_active_left() {
-        let mut ed = Editor::new(None);
+        let mut ed = Editor::test_new();
         ed.buffers.push(Buffer::empty());
         ed.buffers.push(Buffer::empty());
         ed.activate(1);
@@ -2663,7 +2673,7 @@ mod tests {
 
     #[test]
     fn closing_active_buffer_clears_per_buffer_state() {
-        let mut ed = Editor::new(None);
+        let mut ed = Editor::test_new();
         ed.config.clipboard = false;
         ed.buf_mut().insert_text("aaa", false);
         ed.spell.words = vec!["aaa".to_string()];
@@ -2690,7 +2700,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let f = dir.join("a.txt");
         std::fs::write(&f, "hello\n").unwrap();
-        let mut ed = Editor::new(None);
+        let mut ed = Editor::test_new();
         ed.spell.words = vec!["hello".to_string()];
         ed.lsp.hover = Some("h".into());
         ed.open_path(f.clone());
