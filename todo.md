@@ -1,6 +1,4 @@
 # TODO
-- :pwd to see what directory we are running in
-- :pwd /path to change pwd to /path
 - :e new_file_name.txt should create a blank file called file_name.txt in the pwd.
 - ctrl-P should do a fuzzy find as the user types a path. So user types ~/ and it will show files in ~/ 
 - Add find and replace command. Like this :r regex/replace_string to change every instance in the file.

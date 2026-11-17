@@ -50,6 +50,7 @@ pub enum Cmd {
     BPrev,
     Settings,
     Goto(usize),
+    Pwd(Option<String>),
 }
 
 pub fn parse_cmd(s: &str) -> Result<Cmd, String> {
@@ -67,6 +68,8 @@ pub fn parse_cmd(s: &str) -> Result<Cmd, String> {
         ("bnext" | "bn", "") => Ok(Cmd::BNext),
         ("bprev" | "bp", "") => Ok(Cmd::BPrev),
         ("settings", "") => Ok(Cmd::Settings),
+        ("pwd", "") => Ok(Cmd::Pwd(None)),
+        ("pwd", a) => Ok(Cmd::Pwd(Some(a.to_string()))),
         ("e" | "edit", a) if !a.is_empty() => Ok(Cmd::Edit(a.to_string())),
         ("e" | "edit", "") => Err("E480: No file name".into()),
         (_, "") if !head.is_empty() && head.bytes().all(|b| b.is_ascii_digit()) => {
@@ -925,6 +928,21 @@ impl Editor {
                         };
                         self.buf_mut().clamp();
                     }
+                    Cmd::Pwd(arg) => {
+                        let target = match arg {
+                            Some(p) => {
+                                let dir = std::path::PathBuf::from(shrink_tilde(&p));
+                                std::env::set_current_dir(dir).and_then(|()| std::env::current_dir())
+                            }
+                            None => std::env::current_dir(),
+                        };
+                        match target {
+                            Ok(d) => self.set_status(d.display().to_string(), false),
+                            Err(e) => {
+                                self.set_status(format!("E344: cannot change directory: {e}"), true)
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1437,6 +1455,11 @@ mod tests {
             parse_cmd("5x"),
             Err("E492: Not an editor command: 5x".to_string())
         );
+        assert_eq!(parse_cmd("pwd"), Ok(Cmd::Pwd(None)));
+        assert_eq!(
+            parse_cmd("pwd /tmp"),
+            Ok(Cmd::Pwd(Some("/tmp".to_string())))
+        );
     }
 
     #[test]
@@ -1454,6 +1477,28 @@ mod tests {
         ed.cmdline = "10".to_string();
         ed.execute_cmdline();
         assert_eq!(ed.buf().cursor, Pos { line: 9, col: 3 });
+    }
+
+    #[test]
+    fn pwd_reports_and_changes_the_working_directory() {
+        let dir = std::env::temp_dir().join(format!("deditor_pwd_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let saved = std::env::current_dir().unwrap();
+        let mut ed = ed_with("x\n");
+        ed.cmdline = format!("pwd {}", dir.display());
+        ed.execute_cmdline();
+        assert!(!ed.status_err);
+        assert_eq!(std::env::current_dir().unwrap(), dir);
+        ed.cmdline = "pwd".to_string();
+        ed.execute_cmdline();
+        assert!(!ed.status_err);
+        assert_eq!(ed.status.as_deref(), Some(dir.to_str().unwrap()));
+        ed.cmdline = format!("pwd {}", dir.join("nope").display());
+        ed.execute_cmdline();
+        assert!(ed.status_err);
+        assert_eq!(std::env::current_dir().unwrap(), dir);
+        std::env::set_current_dir(&saved).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
