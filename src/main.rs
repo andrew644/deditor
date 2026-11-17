@@ -68,6 +68,7 @@ fn main() -> Result<()> {
         text_sig: ("monospace".into(), 14.0),
         proxy: Some(event_loop.create_proxy()),
         pump_armed: false,
+        close_warned: false,
     };
     let res = event_loop.run_app(&mut app);
     clipboard::shutdown();
@@ -89,6 +90,7 @@ struct App {
     text_sig: (String, f32),
     proxy: Option<winit::event_loop::EventLoopProxy<()>>,
     pump_armed: bool,
+    close_warned: bool,
 }
 
 impl ApplicationHandler for App {
@@ -317,6 +319,20 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::CloseRequested => {
+                if let Some(ed) = self.editor.as_mut()
+                    && ed.buffers.iter().any(|b| b.dirty)
+                    && !self.close_warned
+                {
+                    self.close_warned = true;
+                    ed.set_status(
+                        "E37: No write since last change; close again to discard".to_string(),
+                        true,
+                    );
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                    return;
+                }
                 clipboard::shutdown();
                 event_loop.exit();
             }

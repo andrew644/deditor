@@ -1075,12 +1075,20 @@ impl Editor {
                     Cmd::Write => self.write_active(),
                     Cmd::WriteQuit(_) => {
                         self.write_active();
-                        if !self.status_err {
-                            self.quit = true;
+                        if self.status_err {
+                            return;
                         }
+                        if self.buffers.iter().any(|b| b.dirty) {
+                            self.set_status(
+                                "E37: No write since last change (add ! to override)".to_string(),
+                                true,
+                            );
+                            return;
+                        }
+                        self.quit = true;
                     }
                     Cmd::Quit(bang) => {
-                        if self.buf().dirty && !bang {
+                        if self.buffers.iter().any(|b| b.dirty) && !bang {
                             self.set_status(
                                 "E37: No write since last change (add ! to override)".to_string(),
                                 true,
@@ -2317,6 +2325,47 @@ mod tests {
         ed.cmdline = "q".to_string();
         ed.execute_cmdline();
         assert!(ed.quit);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn quit_checks_every_buffer() {
+        let dir = std::env::temp_dir().join(format!("deditor_quit_all_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("q.txt");
+        std::fs::write(&f, "base\n").unwrap();
+        let mut ed = Editor::new(Some(&f));
+        ed.buffers.push(Buffer::empty());
+        ed.activate(1);
+        ed.buf_mut().insert_text("scratch\n", false);
+        ed.activate(0);
+        assert!(!ed.buf().dirty);
+        ed.cmdline = "q".to_string();
+        ed.execute_cmdline();
+        assert!(!ed.quit);
+        assert!(ed.status_err);
+        ed.cmdline = "q!".to_string();
+        ed.execute_cmdline();
+        assert!(ed.quit);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn write_quit_blocks_on_other_dirty_buffers() {
+        let dir = std::env::temp_dir().join(format!("deditor_wq_all_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("w.txt");
+        std::fs::write(&f, "base\n").unwrap();
+        let mut ed = Editor::new(Some(&f));
+        ed.buffers.push(Buffer::empty());
+        ed.activate(1);
+        ed.buf_mut().insert_text("scratch\n", false);
+        ed.activate(0);
+        ed.cmdline = "wq".to_string();
+        ed.execute_cmdline();
+        assert!(!ed.buf().dirty);
+        assert!(!ed.quit);
+        assert!(ed.status_err);
         std::fs::remove_dir_all(&dir).ok();
     }
 
