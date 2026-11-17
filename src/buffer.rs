@@ -31,13 +31,11 @@ pub struct Buffer {
     pub undo: Vec<UndoEntry>,
     pub redo: Vec<UndoEntry>,
     pub crlf: bool,
+    pub revision: u64,
 }
 
 pub fn line_chars(rope: &Rope, line: usize) -> usize {
-    rope.line(line)
-        .chars()
-        .take_while(|c| *c != '\n')
-        .count()
+    rope.line(line).chars().take_while(|c| *c != '\n').count()
 }
 
 pub fn line_text(rope: &Rope, line: usize) -> String {
@@ -75,7 +73,9 @@ fn trim_one(lead: &str, tab_width: usize) -> String {
     if let Some(rest) = lead.strip_prefix('\t') {
         return rest.to_string();
     }
-    lead.chars().skip(tab_width.min(lead.chars().count())).collect()
+    lead.chars()
+        .skip(tab_width.min(lead.chars().count()))
+        .collect()
 }
 
 fn code_part(text: &str) -> &str {
@@ -92,9 +92,7 @@ fn code_part(text: &str) -> &str {
             None => {
                 if c == '"' || c == '\'' {
                     in_str = Some(c);
-                } else if c == '/'
-                    && matches!(chars.peek(), Some((_, '/')) | Some((_, '*')))
-                {
+                } else if c == '/' && matches!(chars.peek(), Some((_, '/')) | Some((_, '*'))) {
                     return text[..i].trim_end();
                 }
             }
@@ -117,6 +115,7 @@ impl Buffer {
             undo: Vec::new(),
             redo: Vec::new(),
             crlf: false,
+            revision: 0,
         }
     }
 
@@ -198,6 +197,7 @@ impl Buffer {
     }
 
     pub fn after_edit(&mut self) {
+        self.revision += 1;
         self.redo.clear();
         self.refresh_dirty();
     }
@@ -236,8 +236,12 @@ impl Buffer {
                 text: last_text,
             } = &mut last.change
         {
-            let start = self.rope.line_to_char(last_at.line) + last_at.col;
-            let cont = start + last_text.chars().count() == off;
+            let start = if last_at.line < self.rope.len_lines() {
+                self.rope.line_to_char(last_at.line) + last_at.col
+            } else {
+                usize::MAX
+            };
+            let cont = start.checked_add(last_text.chars().count()) == Some(off);
             if cont {
                 last_text.push_str(text);
                 last.cursor_after = self.cursor;
@@ -291,8 +295,9 @@ impl Buffer {
                 self.rope.insert(off, text);
             }
             Change::Replace { edits } => {
-                for (at, old, new) in edits.iter().rev() {
-                    let off = self.offset_of(*at);
+                let prefixes = replace_prefix_shifts(edits);
+                for ((at, old, new), pre) in edits.iter().zip(&prefixes).rev() {
+                    let off = shifted_offset(self, *at, *pre);
                     self.rope.remove(off..off + new.chars().count());
                     self.rope.insert(off, old);
                 }
@@ -300,6 +305,7 @@ impl Buffer {
         }
         self.cursor = e.cursor_before;
         self.clamp();
+        self.revision += 1;
         self.refresh_dirty();
         self.redo.push(e);
     }
@@ -318,7 +324,7 @@ impl Buffer {
                 self.rope.remove(off..off + text.chars().count());
             }
             Change::Replace { edits } => {
-                for (at, old, new) in edits {
+                for (at, old, new) in edits.iter().rev() {
                     let off = self.offset_of(*at);
                     self.rope.remove(off..off + old.chars().count());
                     self.rope.insert(off, new);
@@ -327,13 +333,14 @@ impl Buffer {
         }
         self.cursor = e.cursor_after;
         self.clamp();
+        self.revision += 1;
         self.refresh_dirty();
         self.undo.push(e);
     }
 
     pub fn replace_all(&mut self, edits: Vec<(Pos, String, String)>) {
         let cursor_before = self.cursor;
-        for (at, old, new) in &edits {
+        for (at, old, new) in edits.iter().rev() {
             let off = self.offset_of(*at);
             self.rope.remove(off..off + old.chars().count());
             self.rope.insert(off, new);
@@ -347,6 +354,25 @@ impl Buffer {
             cursor_after,
         });
     }
+}
+
+fn replace_prefix_shifts(edits: &[(Pos, String, String)]) -> Vec<i64> {
+    let mut prefixes = Vec::with_capacity(edits.len());
+    let mut acc: i64 = 0;
+    let mut prev_line = None;
+    for (at, old, new) in edits {
+        if prev_line != Some(at.line) {
+            acc = 0;
+            prev_line = Some(at.line);
+        }
+        prefixes.push(acc);
+        acc += new.chars().count() as i64 - old.chars().count() as i64;
+    }
+    prefixes
+}
+
+fn shifted_offset(b: &Buffer, at: Pos, pre: i64) -> usize {
+    (b.offset_of(at) as i64 + pre).clamp(0, b.rope.len_chars() as i64) as usize
 }
 
 #[cfg(test)]
@@ -456,8 +482,16 @@ mod tests {
         b.undo.clear();
         b.mark_saved();
         b.replace_all(vec![
-            (Pos { line: 0, col: 0 }, "foo".to_string(), "baz".to_string()),
-            (Pos { line: 0, col: 8 }, "foo".to_string(), "baz".to_string()),
+            (
+                Pos { line: 0, col: 0 },
+                "foo".to_string(),
+                "baz".to_string(),
+            ),
+            (
+                Pos { line: 0, col: 8 },
+                "foo".to_string(),
+                "baz".to_string(),
+            ),
         ]);
         assert_eq!(b.rope.to_string(), "baz bar baz\n");
         assert_eq!(b.undo.len(), 1);
@@ -482,4 +516,38 @@ mod tests {
         assert_eq!(plain.pos_of(3), Pos { line: 0, col: 3 });
     }
 
+    #[test]
+    fn replace_all_with_length_change_round_trips() {
+        let mut b = Buffer::empty();
+        b.insert_text("foo bar foo bar\n", false);
+        b.replace_all(vec![
+            (
+                Pos { line: 0, col: 0 },
+                "foo".to_string(),
+                "quux".to_string(),
+            ),
+            (
+                Pos { line: 0, col: 8 },
+                "foo".to_string(),
+                "bazzle".to_string(),
+            ),
+        ]);
+        assert_eq!(b.rope.to_string(), "quux bar bazzle bar\n");
+        b.undo();
+        assert_eq!(b.rope.to_string(), "foo bar foo bar\n");
+        b.redo_action();
+        assert_eq!(b.rope.to_string(), "quux bar bazzle bar\n");
+    }
+
+    #[test]
+    fn insert_coalesce_survives_shrunk_buffer() {
+        let mut b = Buffer::empty();
+        b.insert_text("l0\nl1\n", false);
+        b.cursor = Pos { line: 1, col: 0 };
+        b.insert_text("q", false);
+        b.rope.remove(0..b.rope.len_chars());
+        b.cursor = Pos { line: 0, col: 0 };
+        b.insert_text("z", true);
+        assert_eq!(b.rope.to_string(), "z");
+    }
 }

@@ -300,14 +300,18 @@ impl LspManager {
     }
 
     pub fn diags_for(&self, path: Option<&PathBuf>) -> &[Diag] {
-        path.and_then(|p| self.diags.get(p)).map(|v| v.as_slice()).unwrap_or(&[])
+        path.and_then(|p| self.diags.get(p))
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
     }
 
     /// True while a response or diagnostics burst is likely imminent.
     pub fn busy(&self) -> bool {
         self.phase == Phase::Starting
             || self.waiting != Wait::None
-            || self.last_rx.is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(3))
+            || self
+                .last_rx
+                .is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(3))
     }
 
     pub fn active(&self) -> bool {
@@ -341,8 +345,7 @@ impl LspManager {
                 }
                 RpcMsg::Notification { method, params } => {
                     if method == "textDocument/publishDiagnostics" {
-                        let Ok(dp) =
-                            serde_json::from_value::<lt::PublishDiagnosticsParams>(params)
+                        let Ok(dp) = serde_json::from_value::<lt::PublishDiagnosticsParams>(params)
                         else {
                             continue;
                         };
@@ -389,8 +392,7 @@ impl LspManager {
                     match self.waiting {
                         Wait::Hover => {
                             self.waiting = Wait::None;
-                            self.hover =
-                                Some(parse_hover(result.as_ref()).unwrap_or_default());
+                            self.hover = Some(parse_hover(result.as_ref()).unwrap_or_default());
                         }
                         Wait::Goto => {
                             self.waiting = Wait::None;
@@ -522,14 +524,7 @@ pub fn kind_char(k: Option<lt::CompletionItemKind>) -> char {
         Some(K::FUNCTION) => 'f',
         Some(K::METHOD) => 'm',
         Some(K::FIELD | K::VARIABLE | K::CONSTANT | K::PROPERTY | K::REFERENCE) => 'v',
-        Some(
-            K::STRUCT
-            | K::CLASS
-            | K::ENUM
-            | K::INTERFACE
-            | K::MODULE
-            | K::TYPE_PARAMETER,
-        ) => 't',
+        Some(K::STRUCT | K::CLASS | K::ENUM | K::INTERFACE | K::MODULE | K::TYPE_PARAMETER) => 't',
         Some(K::KEYWORD | K::SNIPPET | K::OPERATOR | K::EVENT | K::UNIT) => 'k',
         _ => '-',
     }
@@ -635,10 +630,16 @@ mod tests {
             { "label": "map()", "insertText": "map" },
             { "label": "filter" }
         ]);
-        let got: Vec<String> = parse_completions(Some(&v)).into_iter().map(|i| i.text).collect();
+        let got: Vec<String> = parse_completions(Some(&v))
+            .into_iter()
+            .map(|i| i.text)
+            .collect();
         assert_eq!(got, vec!["map", "filter"]);
         let v = serde_json::json!({ "isIncomplete": false, "items": [{ "label": "x" }] });
-        let got: Vec<String> = parse_completions(Some(&v)).into_iter().map(|i| i.text).collect();
+        let got: Vec<String> = parse_completions(Some(&v))
+            .into_iter()
+            .map(|i| i.text)
+            .collect();
         assert_eq!(got, vec!["x"]);
         // snippet placeholders stripped
         let v = serde_json::json!([{
@@ -678,7 +679,10 @@ mod tests {
         assert_eq!(server_for(Path::new("x.odin")), Some("ols"));
         assert_eq!(server_for(Path::new("x.java")), Some("jdtls"));
         assert_eq!(server_for(Path::new("x.cs")), Some("csharp-ls"));
-        assert_eq!(server_for(Path::new("x.ts")), Some("typescript-language-server"));
+        assert_eq!(
+            server_for(Path::new("x.ts")),
+            Some("typescript-language-server")
+        );
         assert_eq!(server_for(Path::new("x.md")), None);
         assert_eq!(server_for(Path::new("x.yaml")), None);
     }
@@ -696,7 +700,10 @@ mod tests {
     #[test]
     fn file_url_absolute_roundtrip() {
         let u = file_url(Path::new("/tmp/proj/main.rs")).unwrap();
-        assert_eq!(u.to_file_path().unwrap(), PathBuf::from("/tmp/proj/main.rs"));
+        assert_eq!(
+            u.to_file_path().unwrap(),
+            PathBuf::from("/tmp/proj/main.rs")
+        );
     }
 
     #[cfg(unix)]
@@ -704,10 +711,9 @@ mod tests {
     fn framing_roundtrip_via_cat() {
         let c = LspClient::spawn("cat", &[], "/tmp").unwrap();
         c.notify("test/notify", json!({ "n": 7, "unicode": "héllo→" }));
-        let msg = c
-            .rx
-            .recv_timeout(std::time::Duration::from_secs(5))
-            .unwrap();
+        let msg =
+            c.rx.recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
         match msg {
             RpcMsg::Notification { method, params } => {
                 assert_eq!(method, "test/notify");

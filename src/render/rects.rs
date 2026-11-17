@@ -182,7 +182,8 @@ impl RectPipeline {
             return;
         }
         let screen = [gpu.config.width as f32, gpu.config.height as f32];
-        gpu.queue.write_buffer(&self.screen_uniform, 0, bytemuck::bytes_of(&screen));
+        gpu.queue
+            .write_buffer(&self.screen_uniform, 0, bytemuck::bytes_of(&screen));
         let slot = usize::from(overlay);
         self.slots[slot].write(&gpu.device, &gpu.queue, rects);
         let bind = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {

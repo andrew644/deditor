@@ -127,11 +127,7 @@ fn extend_around(rope: &Rope, start: usize, end: usize) -> (usize, usize) {
 }
 
 fn quote_obj(rope: &Rope, line: usize, col: usize, q: char, inner: bool) -> Option<(usize, usize)> {
-    let text: Vec<char> = rope
-        .line(line)
-        .chars()
-        .take_while(|c| *c != '\n')
-        .collect();
+    let text: Vec<char> = rope.line(line).chars().take_while(|c| *c != '\n').collect();
     if text.is_empty() {
         return None;
     }
@@ -197,13 +193,14 @@ fn match_close(text: &[char], i: usize) -> Option<usize> {
     None
 }
 
-
-fn bracket_for(rope: &Rope, line: usize, col: usize, want: char, inner: bool) -> Option<(usize, usize)> {
-    let text: Vec<char> = rope
-        .line(line)
-        .chars()
-        .take_while(|c| *c != '\n')
-        .collect();
+fn bracket_for(
+    rope: &Rope,
+    line: usize,
+    col: usize,
+    want: char,
+    inner: bool,
+) -> Option<(usize, usize)> {
+    let text: Vec<char> = rope.line(line).chars().take_while(|c| *c != '\n').collect();
     if text.is_empty() {
         return None;
     }
@@ -225,10 +222,11 @@ fn bracket_for(rope: &Rope, line: usize, col: usize, want: char, inner: bool) ->
         for i in (0..=limit).rev() {
             if text[i] == o
                 && let Some(j) = match_open(&text, i)
-                    && j >= col {
-                        found = Some((i, j));
-                        break;
-                    }
+                && j >= col
+            {
+                found = Some((i, j));
+                break;
+            }
         }
     }
     if found.is_none() {
@@ -265,11 +263,23 @@ pub fn object(rope: &Rope, pos: Pos, inner: bool, obj: Obj) -> Option<(Pos, Pos)
     let line = pos.line.min(rope.len_lines().saturating_sub(1));
     match obj {
         Obj::Quote(q) => {
-            let (s, e) = quote_obj(rope, line, pos.col.min(crate::buffer::line_chars(rope, line)), q, inner)?;
+            let (s, e) = quote_obj(
+                rope,
+                line,
+                pos.col.min(crate::buffer::line_chars(rope, line)),
+                q,
+                inner,
+            )?;
             Some((pos_of(rope, s), pos_of(rope, e)))
         }
         Obj::Bracket(b) => {
-            let (s, e) = bracket_for(rope, line, pos.col.min(crate::buffer::line_chars(rope, line)), b, inner)?;
+            let (s, e) = bracket_for(
+                rope,
+                line,
+                pos.col.min(crate::buffer::line_chars(rope, line)),
+                b,
+                inner,
+            )?;
             Some((pos_of(rope, s), pos_of(rope, e)))
         }
         Obj::Word | Obj::BigWord => {

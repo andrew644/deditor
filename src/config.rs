@@ -333,9 +333,9 @@ pub fn setting_value(cfg: &Config, key: &str) -> String {
         "clipboard" => format!("{}", cfg.clipboard),
         "show_whitespace" => format!("{}", cfg.show_whitespace),
         "spellcheck" => format!("{}", cfg.spellcheck),
-        k if k.starts_with("theme.") => {
-            theme_color(&cfg.theme, &k["theme.".len()..]).unwrap_or("?").to_string()
-        }
+        k if k.starts_with("theme.") => theme_color(&cfg.theme, &k["theme.".len()..])
+            .unwrap_or("?")
+            .to_string(),
         _ => String::new(),
     }
 }

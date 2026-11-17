@@ -39,8 +39,7 @@ fn key_down(ed: &mut Editor, key: &Key, mods: ModifiersState) {
             ed.status_err = true;
         } else {
             let bg = ed.theme.bg;
-            let lum =
-                (((bg >> 16) & 0xFF) + ((bg >> 8) & 0xFF) + (bg & 0xFF)) / 3;
+            let lum = (((bg >> 16) & 0xFF) + ((bg >> 8) & 0xFF) + (bg & 0xFF)) / 3;
             let label = if lum > 127 { "light" } else { "dark" };
             ed.set_status(format!("{label} mode"), false);
         }
@@ -177,7 +176,10 @@ fn normal_key(ed: &mut Editor, key: &Key, mods: ModifiersState) {
             Some("a") => {
                 let c = ed.buf().cursor;
                 let len = line_chars(&ed.buf().rope, c.line);
-                ed.buf_mut().cursor = Pos { line: c.line, col: len };
+                ed.buf_mut().cursor = Pos {
+                    line: c.line,
+                    col: len,
+                };
                 ed.enter_insert();
             }
             _ => {}
@@ -186,14 +188,15 @@ fn normal_key(ed: &mut Editor, key: &Key, mods: ModifiersState) {
         return;
     }
     if let Some(c) = k
-        && let Some(d) = c.chars().next().and_then(|ch| ch.to_digit(10)) {
-            if ed.count == 0 && d == 0 {
-                ed.run_motion(Motion::Zero, 1);
-            } else {
-                ed.count = ed.count * 10 + d;
-            }
-            return;
+        && let Some(d) = c.chars().next().and_then(|ch| ch.to_digit(10))
+    {
+        if ed.count == 0 && d == 0 {
+            ed.run_motion(Motion::Zero, 1);
+        } else {
+            ed.count = ed.count.saturating_mul(10).saturating_add(d);
         }
+        return;
+    }
     let count = if ed.count == 0 { 1 } else { ed.count };
     let page = match key {
         Key::Named(NamedKey::PageDown) => Some(Motion::PageDown),
@@ -335,27 +338,38 @@ fn normal_key(ed: &mut Editor, key: &Key, mods: ModifiersState) {
         "g" => ed.pending = Pending::G,
         "z" => ed.pending = Pending::Z,
         "K" => ed.hover_cur(),
-        "f" => ed.pending = Pending::F { forward: true, to: true },
-        "F" => ed.pending = Pending::F { forward: false, to: true },
-        "t" => ed.pending = Pending::F { forward: true, to: false },
-        "T" => ed.pending = Pending::F { forward: false, to: false },
+        "f" => {
+            ed.pending = Pending::F {
+                forward: true,
+                to: true,
+            }
+        }
+        "F" => {
+            ed.pending = Pending::F {
+                forward: false,
+                to: true,
+            }
+        }
+        "t" => {
+            ed.pending = Pending::F {
+                forward: true,
+                to: false,
+            }
+        }
+        "T" => {
+            ed.pending = Pending::F {
+                forward: false,
+                to: false,
+            }
+        }
         ";" | "," => {
             if let Some((dir, ch)) = ed.last_find {
-                let dir = match (k, dir) {
-                    (",", FindDir::F) | (",", FindDir::T) => {
-                        if matches!(dir, FindDir::F) { FindDir::T } else { FindDir::F }
-                    }
-                    (_, FindDir::F) => FindDir::F,
-                    (_, FindDir::T) => FindDir::T,
-                    (_, FindDir::BackF) => FindDir::BackF,
-                    (_, FindDir::BackT) => FindDir::BackT,
-                };
-                let rev = k == ",";
-                let d = match (dir, rev) {
-                    (FindDir::F, false) | (FindDir::T, true) => FindDir::F,
-                    (FindDir::T, false) | (FindDir::F, true) => FindDir::T,
-                    (FindDir::BackF, false) | (FindDir::BackT, true) => FindDir::BackF,
-                    _ => FindDir::BackT,
+                let d = match (k, dir) {
+                    (",", FindDir::F) => FindDir::BackF,
+                    (",", FindDir::BackF) => FindDir::F,
+                    (",", FindDir::T) => FindDir::BackT,
+                    (",", FindDir::BackT) => FindDir::T,
+                    (_, d) => d,
                 };
                 ed.run_find(d, ch, count);
             }
@@ -409,7 +423,10 @@ fn normal_key(ed: &mut Editor, key: &Key, mods: ModifiersState) {
         "a" => {
             let c = ed.buf().cursor;
             let len = line_chars(&ed.buf().rope, c.line);
-            ed.buf_mut().cursor = Pos { line: c.line, col: (c.col + 1).min(len) };
+            ed.buf_mut().cursor = Pos {
+                line: c.line,
+                col: (c.col + 1).min(len),
+            };
             ed.enter_insert();
         }
         "I" => {
@@ -419,7 +436,10 @@ fn normal_key(ed: &mut Editor, key: &Key, mods: ModifiersState) {
         "A" => {
             let c = ed.buf().cursor;
             let len = line_chars(&ed.buf().rope, c.line);
-            ed.buf_mut().cursor = Pos { line: c.line, col: len };
+            ed.buf_mut().cursor = Pos {
+                line: c.line,
+                col: len,
+            };
             ed.enter_insert();
         }
         "v" => ed.start_visual(false),
@@ -451,8 +471,7 @@ fn visual_key(ed: &mut Editor, k: &str, count: u32) {
             ed.visual_block = false;
             ed.visual_linewise = !ed.visual_linewise;
         }
-        "h" | "j" | "k" | "l" | "w" | "W" | "b" | "B" | "e" | "E" | "0" | "^" | "$"
-        | "%" => {
+        "h" | "j" | "k" | "l" | "w" | "W" | "b" | "B" | "e" | "E" | "0" | "^" | "$" | "%" => {
             let m = match (ed.visual_linewise, motion_of(k).unwrap()) {
                 (true, Motion::J) => Motion::LineDown,
                 (true, Motion::K) => Motion::LineUp,
@@ -461,8 +480,18 @@ fn visual_key(ed: &mut Editor, k: &str, count: u32) {
             ed.run_motion(m, count);
         }
         "G" => ed.run_motion(Motion::G, count),
-        "i" => ed.pending = Pending::TextObj { op: Operator::Change, inner: true },
-        "a" => ed.pending = Pending::TextObj { op: Operator::Change, inner: false },
+        "i" => {
+            ed.pending = Pending::TextObj {
+                op: Operator::Change,
+                inner: true,
+            }
+        }
+        "a" => {
+            ed.pending = Pending::TextObj {
+                op: Operator::Change,
+                inner: false,
+            }
+        }
         "d" | "c" | "y" => {
             if ed.visual_block {
                 ed.block_apply(op_of(k));
@@ -556,15 +585,14 @@ fn insert_key(ed: &mut Editor, key: &Key, mods: ModifiersState) {
             ed.buf_mut().insert_text(" ", co);
             ed.maybe_completion(" ");
         }
-        Key::Character(s)
-            if s.chars().next().is_some_and(|c| !c.is_control()) => {
-                if let Some(ch) = s.chars().next() {
-                    ed.close_bracket_indent(ch);
-                }
-                let co = ed.coalesce_open;
-                ed.buf_mut().insert_text(s, co);
-                ed.maybe_completion(s);
+        Key::Character(s) if s.chars().next().is_some_and(|c| !c.is_control()) => {
+            if let Some(ch) = s.chars().next() {
+                ed.close_bracket_indent(ch);
             }
+            let co = ed.coalesce_open;
+            ed.buf_mut().insert_text(s, co);
+            ed.maybe_completion(s);
+        }
         _ => {}
     }
     ed.buf_mut().clamp();
@@ -611,7 +639,8 @@ fn op_char(op: Operator) -> &'static str {
         Operator::Delete => "d",
         Operator::Change => "c",
         Operator::Yank => "y",
-        Operator::Indent | Operator::Outdent => "",
+        Operator::Indent => ">",
+        Operator::Outdent => "<",
     }
 }
 
@@ -703,9 +732,10 @@ fn command_key(ed: &mut Editor, key: &Key, mods: ModifiersState) {
         }
         Key::Character(s) => {
             if let Some(c) = s.chars().next()
-                && !c.is_control() {
-                    ed.cmdline.push(c);
-                }
+                && !c.is_control()
+            {
+                ed.cmdline.push(c);
+            }
         }
         Key::Named(NamedKey::Space) => ed.cmdline.push(' '),
         _ => {}
@@ -734,9 +764,10 @@ fn panel_key(ed: &mut Editor, key: &Key, mods: ModifiersState) {
         Key::Named(NamedKey::ArrowUp) => ed.panel_move(-1),
         Key::Character(s) => {
             if let Some(c) = s.chars().next()
-                && !c.is_control() {
-                    ed.panel_type(c);
-                }
+                && !c.is_control()
+            {
+                ed.panel_type(c);
+            }
         }
         Key::Named(NamedKey::Space) => ed.panel_type(' '),
         _ => {}
@@ -762,10 +793,7 @@ mod tests {
         ed.enter_insert();
         type_keys(
             &mut ed,
-            &[
-                Key::Named(NamedKey::Space),
-                Key::Character("x".into()),
-            ],
+            &[Key::Named(NamedKey::Space), Key::Character("x".into())],
         );
         assert_eq!(ed.buf().rope.to_string(), "a xb");
         assert_eq!(ed.buf().cursor, Pos { line: 0, col: 3 });
@@ -847,19 +875,13 @@ mod tests {
         assert_eq!(ed.buf().cursor, Pos { line: 0, col: 3 });
         type_keys(
             &mut ed,
-            &[
-                Key::Character("2".into()),
-                Key::Named(NamedKey::PageDown),
-            ],
+            &[Key::Character("2".into()), Key::Named(NamedKey::PageDown)],
         );
         assert_eq!(ed.buf().cursor.line, 20);
         assert_eq!(ed.count, 0);
         type_keys(
             &mut ed,
-            &[
-                Key::Character("d".into()),
-                Key::Named(NamedKey::PageUp),
-            ],
+            &[Key::Character("d".into()), Key::Named(NamedKey::PageUp)],
         );
         assert_eq!(ed.buf().rope.len_lines(), 30);
         assert_eq!(ed.buf().rope.line(10).to_string(), "line 21\n");
@@ -887,7 +909,8 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(drawn, (25..35).collect::<Vec<_>>());
         assert_eq!(
-            ed.wrap().screen_row(&b.rope, b.view_top, b.view_sub, b.cursor),
+            ed.wrap()
+                .screen_row(&b.rope, b.view_top, b.view_sub, b.cursor),
             Some(5)
         );
         assert_eq!(ed.pending, Pending::None);
@@ -917,10 +940,7 @@ mod tests {
         ed.buf_mut().cursor = Pos { line: 0, col: 0 };
         type_keys(
             &mut ed,
-            &[
-                Key::Character("3".into()),
-                Key::Character("w".into()),
-            ],
+            &[Key::Character("3".into()), Key::Character("w".into())],
         );
         assert_eq!(ed.buf().cursor, Pos { line: 0, col: 14 });
         type_keys(
@@ -946,10 +966,7 @@ mod tests {
         assert_eq!(ed.buf().cursor, Pos { line: 1, col: 4 });
         type_keys(
             &mut ed,
-            &[
-                Key::Character("f".into()),
-                Key::Named(NamedKey::Escape),
-            ],
+            &[Key::Character("f".into()), Key::Named(NamedKey::Escape)],
         );
         assert_eq!(ed.buf().rope.to_string(), "int main() {\n    f\n");
     }
@@ -969,10 +986,7 @@ mod tests {
         closing.buf_mut().insert_text("    foo();\n    }\n", false);
         closing.buf_mut().cursor = Pos { line: 1, col: 0 };
         type_keys(&mut closing, &[Key::Character("O".into())]);
-        assert_eq!(
-            closing.buf().rope.to_string(),
-            "    foo();\n\n    }\n"
-        );
+        assert_eq!(closing.buf().rope.to_string(), "    foo();\n\n    }\n");
     }
 
     #[test]
@@ -984,10 +998,7 @@ mod tests {
         ed.enter_insert();
         type_keys(
             &mut ed,
-            &[
-                Key::Named(NamedKey::Enter),
-                Key::Character("x".into()),
-            ],
+            &[Key::Named(NamedKey::Enter), Key::Character("x".into())],
         );
         assert_eq!(ed.buf().rope.to_string(), "    foo();\n    x\n");
         assert_eq!(ed.buf().cursor, Pos { line: 1, col: 5 });
@@ -1048,11 +1059,17 @@ mod tests {
         let mut ed = Editor::new(None);
         ed.buf_mut().insert_text("a b", false);
         ed.buf_mut().cursor = Pos { line: 0, col: 0 };
-        type_keys(&mut ed, &[Key::Character("f".into()), Key::Named(NamedKey::Space)]);
+        type_keys(
+            &mut ed,
+            &[Key::Character("f".into()), Key::Named(NamedKey::Space)],
+        );
         assert_eq!(ed.buf().cursor, Pos { line: 0, col: 1 });
         assert_eq!(ed.last_find, Some((FindDir::F, ' ')));
         type_keys(&mut ed, &[Key::Character("l".into())]);
-        type_keys(&mut ed, &[Key::Character("r".into()), Key::Named(NamedKey::Space)]);
+        type_keys(
+            &mut ed,
+            &[Key::Character("r".into()), Key::Named(NamedKey::Space)],
+        );
         assert_eq!(ed.buf().rope.to_string(), "a  ");
     }
 
@@ -1158,13 +1175,21 @@ mod tests {
         let mut ed = Editor::new(None);
         ed.buf_mut().insert_text("alpha\nbeta\n", false);
         ed.buf_mut().cursor = Pos { line: 0, col: 0 };
-        key_down(&mut ed, &Key::Character("v".into()), ModifiersState::CONTROL);
+        key_down(
+            &mut ed,
+            &Key::Character("v".into()),
+            ModifiersState::CONTROL,
+        );
         assert_eq!(ed.mode, Mode::Visual);
         assert!(ed.visual_block);
         assert_eq!(ed.block_range(), Some((0, 0, 0, 0)));
         ed.buf_mut().cursor = Pos { line: 1, col: 2 };
         assert_eq!(ed.block_range(), Some((0, 1, 0, 2)));
-        key_down(&mut ed, &Key::Character("v".into()), ModifiersState::CONTROL);
+        key_down(
+            &mut ed,
+            &Key::Character("v".into()),
+            ModifiersState::CONTROL,
+        );
         assert_eq!(ed.mode, Mode::Normal);
         assert!(!ed.visual_block);
         assert_eq!(ed.visual_anchor, None);
@@ -1176,7 +1201,11 @@ mod tests {
         ed.config.clipboard = false;
         ed.buf_mut().insert_text("alpha\nbeta\ngamma\n", false);
         ed.buf_mut().cursor = Pos { line: 0, col: 1 };
-        key_down(&mut ed, &Key::Character("v".into()), ModifiersState::CONTROL);
+        key_down(
+            &mut ed,
+            &Key::Character("v".into()),
+            ModifiersState::CONTROL,
+        );
         ed.buf_mut().cursor = Pos { line: 2, col: 3 };
         type_keys(&mut ed, &[Key::Character("y".into())]);
         assert_eq!(ed.register, "lph\neta\namm");
@@ -1192,7 +1221,11 @@ mod tests {
         ed.config.clipboard = false;
         ed.buf_mut().insert_text("alpha\nx\nb\ngamma\n", false);
         ed.buf_mut().cursor = Pos { line: 0, col: 1 };
-        key_down(&mut ed, &Key::Character("v".into()), ModifiersState::CONTROL);
+        key_down(
+            &mut ed,
+            &Key::Character("v".into()),
+            ModifiersState::CONTROL,
+        );
         ed.buf_mut().cursor = Pos { line: 3, col: 3 };
         type_keys(&mut ed, &[Key::Character("d".into())]);
         assert_eq!(ed.buf().rope.to_string(), "aa\nx\nb\nga\n");
@@ -1231,7 +1264,11 @@ mod tests {
         ed.buf_mut().insert_text("alpha\nbeta\n", false);
         ed.register = "keep".into();
         ed.buf_mut().cursor = Pos { line: 0, col: 1 };
-        key_down(&mut ed, &Key::Character("v".into()), ModifiersState::CONTROL);
+        key_down(
+            &mut ed,
+            &Key::Character("v".into()),
+            ModifiersState::CONTROL,
+        );
         ed.buf_mut().cursor = Pos { line: 1, col: 1 };
         type_keys(&mut ed, &[Key::Character("c".into())]);
         assert_eq!(ed.buf().rope.to_string(), "apha\nbta\n");
@@ -1244,7 +1281,11 @@ mod tests {
         let mut ed = Editor::new(None);
         ed.buf_mut().insert_text("alpha\nbeta\n", false);
         ed.buf_mut().cursor = Pos { line: 0, col: 1 };
-        key_down(&mut ed, &Key::Character("v".into()), ModifiersState::CONTROL);
+        key_down(
+            &mut ed,
+            &Key::Character("v".into()),
+            ModifiersState::CONTROL,
+        );
         ed.buf_mut().cursor = Pos { line: 1, col: 3 };
         type_keys(&mut ed, &[Key::Character("v".into())]);
         assert_eq!(ed.mode, Mode::Visual);
@@ -1261,7 +1302,10 @@ mod tests {
         ed.config.clipboard = false;
         ed.buf_mut().insert_text("one\ntwo\nthree\n", false);
         ed.buf_mut().cursor = Pos { line: 1, col: 0 };
-        type_keys(&mut ed, &[Key::Character("d".into()), Key::Character("G".into())]);
+        type_keys(
+            &mut ed,
+            &[Key::Character("d".into()), Key::Character("G".into())],
+        );
         assert_eq!(ed.buf().rope.to_string(), "one\n");
         assert_eq!(ed.register, "two\nthree\n");
     }
@@ -1320,5 +1364,42 @@ mod tests {
         type_keys(&mut ed, &[Key::Named(NamedKey::F1)]);
         assert!(!ed.config.spellcheck);
         assert_eq!(ed.status.as_deref(), Some("spellcheck: off"));
+    }
+
+    #[test]
+    fn comma_repeats_find_in_reverse() {
+        let mut ed = Editor::new(None);
+        ed.config.clipboard = false;
+        ed.buf_mut().insert_text("a b a b a\n", false);
+        ed.buf_mut().cursor = Pos { line: 0, col: 0 };
+        type_keys(
+            &mut ed,
+            &[Key::Character("f".into()), Key::Character("a".into())],
+        );
+        assert_eq!(ed.buf().cursor.col, 4);
+        type_keys(&mut ed, &[Key::Character(";".into())]);
+        assert_eq!(ed.buf().cursor.col, 8);
+        type_keys(&mut ed, &[Key::Character(",".into())]);
+        assert_eq!(ed.buf().cursor.col, 4);
+        type_keys(&mut ed, &[Key::Character(",".into())]);
+        assert_eq!(ed.buf().cursor.col, 0);
+    }
+
+    #[test]
+    fn double_gt_and_lt_indent_a_line() {
+        let mut ed = Editor::new(None);
+        ed.config.clipboard = false;
+        ed.buf_mut().insert_text("hello\n", false);
+        ed.buf_mut().cursor = Pos { line: 0, col: 0 };
+        type_keys(
+            &mut ed,
+            &[Key::Character(">".into()), Key::Character(">".into())],
+        );
+        assert_eq!(ed.buf().rope.to_string(), "    hello\n");
+        type_keys(
+            &mut ed,
+            &[Key::Character("<".into()), Key::Character("<".into())],
+        );
+        assert_eq!(ed.buf().rope.to_string(), "hello\n");
     }
 }

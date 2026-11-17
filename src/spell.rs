@@ -98,8 +98,7 @@ pub fn misspelled_spans(line: &str, words: &[String]) -> Vec<(usize, usize)> {
         let mut i = 0;
         while i + t.len() <= chars.len() {
             if chars[i..i + t.len()] == t[..] {
-                let before_ok =
-                    i == 0 || !char_is_word(chars[i - 1]) || !char_is_word(t[0]);
+                let before_ok = i == 0 || !char_is_word(chars[i - 1]) || !char_is_word(t[0]);
                 let after_ok = i + t.len() >= chars.len()
                     || !char_is_word(chars[i + t.len()])
                     || !char_is_word(t[t.len() - 1]);

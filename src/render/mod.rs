@@ -124,18 +124,10 @@ impl TextSystem {
         let cache = Cache::new(device);
         let viewport = Viewport::new(device, &cache);
         let mut atlas = TextAtlas::new(device, queue, &cache, format);
-        let renderer = TextRenderer::new(
-            &mut atlas,
-            device,
-            wgpu::MultisampleState::default(),
-            None,
-        );
-        let overlay_renderer = TextRenderer::new(
-            &mut atlas,
-            device,
-            wgpu::MultisampleState::default(),
-            None,
-        );
+        let renderer =
+            TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
+        let overlay_renderer =
+            TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
         let mut ts = Self {
             font_system,
             swash_cache,
@@ -177,9 +169,10 @@ impl TextSystem {
 }
 
 pub fn grid_family<'a>(fonts: &FontSystem, name: &'a str) -> Family<'a> {
-    let named = fonts.db().faces().any(|f| {
-        f.monospaced && f.families.iter().any(|(n, _)| n.eq_ignore_ascii_case(name))
-    });
+    let named = fonts
+        .db()
+        .faces()
+        .any(|f| f.monospaced && f.families.iter().any(|(n, _)| n.eq_ignore_ascii_case(name)));
     if named {
         Family::Name(name)
     } else {
@@ -200,7 +193,6 @@ pub fn measure_cell(fonts: &mut FontSystem, family: Family<'_>, size: f32) -> f3
         .unwrap_or(size * 0.6)
         .max(1.0)
 }
-
 
 pub struct Layout {
     pub cols: u32,
@@ -466,12 +458,7 @@ pub fn draw_content(
                 }
             }
             let raw = crate::buffer::line_text(&buf.rope, row.line);
-            body_s.push_str(&wrap.text(
-                &raw,
-                row.start,
-                row.end,
-                ed.config.show_whitespace,
-            ));
+            body_s.push_str(&wrap.text(&raw, row.start, row.end, ed.config.show_whitespace));
         }
         if r + 1 < rows.len() {
             gutter_s.push('\n');
@@ -479,17 +466,14 @@ pub fn draw_content(
         }
     }
     let diags = ed.lsp.diags_for(buf.path.as_ref());
-    let cursor_diag = diags
-        .iter()
-        .find(|d| d.line == buf.cursor.line)
-        .map(|d| {
-            let tag = if d.severity == crate::lsp::SEV_WARN {
-                "WARN"
-            } else {
-                "ERR"
-            };
-            format!("{tag}: {}", d.message.replace('\n', " "))
-        });
+    let cursor_diag = diags.iter().find(|d| d.line == buf.cursor.line).map(|d| {
+        let tag = if d.severity == crate::lsp::SEV_WARN {
+            "WARN"
+        } else {
+            "ERR"
+        };
+        format!("{tag}: {}", d.message.replace('\n', " "))
+    });
     let msg = ed.status.clone().or(cursor_diag).unwrap_or_default();
     let mode_label = match ed.mode {
         crate::mode::Mode::Normal => "NORMAL",
@@ -546,7 +530,10 @@ pub fn draw_content(
             &buf.rope,
             buf.view_top,
             buf.view_sub,
-            crate::buffer::Pos { line: d.line, col: 0 },
+            crate::buffer::Pos {
+                line: d.line,
+                col: 0,
+            },
         ) else {
             continue;
         };
@@ -603,7 +590,11 @@ pub fn draw_content(
     let menu_open = !menu_s.is_empty() && ed.panel == crate::fuzzy::Panel::None;
     let mut menu_pos = None;
     if menu_open {
-        let mcols = menu_lines.iter().map(|s| s.chars().count()).max().unwrap_or(1);
+        let mcols = menu_lines
+            .iter()
+            .map(|s| s.chars().count())
+            .max()
+            .unwrap_or(1);
         let mrows = menu_lines.len() as f32;
         let mw = mcols as f32 * cw;
         let mx = cur_x.min(w - mw);
@@ -643,13 +634,17 @@ pub fn draw_content(
         }
         let nrows = comp_s.lines().count() as f32;
         let row = 1.0
-            + wrap.screen_row(
-                &buf.rope,
-                buf.view_top,
-                buf.view_sub,
-                crate::buffer::Pos { line: cs.line, col: 0 },
-            )
-            .unwrap_or(0) as f32;
+            + wrap
+                .screen_row(
+                    &buf.rope,
+                    buf.view_top,
+                    buf.view_sub,
+                    crate::buffer::Pos {
+                        line: cs.line,
+                        col: 0,
+                    },
+                )
+                .unwrap_or(0) as f32;
         let cwid = 42.0f32 * cw;
         let cx = ((l.gutter_cols as f32 + cs.col as f32) * cw).min(w - cwid);
         let cy = ((row + 1.0) * ch).min(h - nrows * ch);
@@ -720,12 +715,7 @@ pub fn draw_content(
     let mut tb_menu = mkbuf(ts, &menu_s, w, h);
 
     let areas: Vec<(&mut Buffer, f32, f32, u32)> = vec![
-        (
-            &mut tb_tab as &mut Buffer,
-            0.0f32,
-            0.0f32,
-            theme.fg,
-        ),
+        (&mut tb_tab as &mut Buffer, 0.0f32, 0.0f32, theme.fg),
         (&mut tb_gutter, 0.0, ch, theme.gutter_fg),
         (&mut tb_body, l.gutter_cols as f32 * cw, ch, theme.fg),
         (&mut tb_msg, 0.0, h - ch, left_color),
@@ -792,9 +782,21 @@ fn draw_layer(
     view: &wgpu::TextureView,
     layer: Layer<'_>,
 ) {
-    let Layer { load, overlay, rects, areas } = layer;
-    let TextSystem { renderer, overlay_renderer, font_system, atlas, viewport, swash_cache, .. } =
-        ts;
+    let Layer {
+        load,
+        overlay,
+        rects,
+        areas,
+    } = layer;
+    let TextSystem {
+        renderer,
+        overlay_renderer,
+        font_system,
+        atlas,
+        viewport,
+        swash_cache,
+        ..
+    } = ts;
     let renderer = if overlay { overlay_renderer } else { renderer };
     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
         label: None,
@@ -802,7 +804,10 @@ fn draw_layer(
             view,
             depth_slice: None,
             resolve_target: None,
-            ops: wgpu::Operations { load, store: wgpu::StoreOp::Store },
+            ops: wgpu::Operations {
+                load,
+                store: wgpu::StoreOp::Store,
+            },
         })],
         depth_stencil_attachment: None,
         timestamp_writes: None,
@@ -837,9 +842,7 @@ fn draw_layer(
             swash_cache,
         )
         .unwrap();
-    renderer
-        .render(atlas, viewport, &mut pass)
-        .unwrap();
+    renderer.render(atlas, viewport, &mut pass).unwrap();
 }
 
 fn pending_label(ed: &crate::app::Editor) -> String {
@@ -902,19 +905,18 @@ fn fit(s: &str, room: usize) -> String {
 /// `sa` and `sb` are the inclusive anchor and exclusive end from
 /// `Editor::sel_range`. `None` for from means the row's first cell, and
 /// `usize::MAX` for to means the end of the screen row.
-fn sel_row_span(
-    sa: Pos,
-    sb: Pos,
-    lw: bool,
-    line: usize,
-) -> Option<(Option<usize>, usize)> {
+fn sel_row_span(sa: Pos, sb: Pos, lw: bool, line: usize) -> Option<(Option<usize>, usize)> {
     if lw {
         let last = if sb.col == 0 {
             sb.line.saturating_sub(1)
         } else {
             sb.line
         };
-        return if line > last { None } else { Some((None, usize::MAX)) };
+        return if line > last {
+            None
+        } else {
+            Some((None, usize::MAX))
+        };
     }
     if line < sa.line || line > sb.line {
         return None;
@@ -1022,12 +1024,24 @@ mod tests {
     fn visual_span_covers_exactly_the_inclusive_selection() {
         let p = |line, col| Pos { line, col };
         assert_eq!(sel_row_span(p(0, 0), p(0, 3), false, 0), Some((Some(0), 3)));
-        assert_eq!(sel_row_span(p(0, 2), p(1, 4), false, 0), Some((Some(2), usize::MAX)));
+        assert_eq!(
+            sel_row_span(p(0, 2), p(1, 4), false, 0),
+            Some((Some(2), usize::MAX))
+        );
         assert_eq!(sel_row_span(p(0, 2), p(1, 4), false, 1), Some((None, 4)));
-        assert_eq!(sel_row_span(p(0, 2), p(2, 4), false, 1), Some((None, usize::MAX)));
+        assert_eq!(
+            sel_row_span(p(0, 2), p(2, 4), false, 1),
+            Some((None, usize::MAX))
+        );
         assert_eq!(sel_row_span(p(0, 2), p(2, 0), false, 2), None);
-        assert_eq!(sel_row_span(p(0, 0), p(2, 0), true, 1), Some((None, usize::MAX)));
+        assert_eq!(
+            sel_row_span(p(0, 0), p(2, 0), true, 1),
+            Some((None, usize::MAX))
+        );
         assert_eq!(sel_row_span(p(0, 0), p(2, 0), true, 2), None);
-        assert_eq!(sel_row_span(p(0, 0), p(1, 3), true, 1), Some((None, usize::MAX)));
+        assert_eq!(
+            sel_row_span(p(0, 0), p(1, 3), true, 1),
+            Some((None, usize::MAX))
+        );
     }
 }

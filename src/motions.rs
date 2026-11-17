@@ -72,7 +72,11 @@ pub fn apply(rope: &Rope, pos: Pos, m: Motion, count: u32, ctx: &Ctx) -> Pos {
     match m {
         Motion::H => clamp(rope, pos.line, pos.col.saturating_sub(n)),
         Motion::J | Motion::K => {
-            let delta = if m == Motion::J { n as i64 } else { -(n as i64) };
+            let delta = if m == Motion::J {
+                n as i64
+            } else {
+                -(n as i64)
+            };
             let (line, sub) = ctx.wrap.shift(rope, pos, delta);
             clamp(rope, line, ctx.wrap.col_at(rope, line, sub, ctx.prefer_x))
         }
@@ -83,11 +87,20 @@ pub fn apply(rope: &Rope, pos: Pos, m: Motion, count: u32, ctx: &Ctx) -> Pos {
             let max = len.saturating_sub(1);
             clamp(rope, pos.line, (pos.col + n).min(max))
         }
-        Motion::Zero => Pos { line: pos.line, col: 0 },
-        Motion::Caret => Pos { line: pos.line, col: first_non_blank(rope, pos.line) },
+        Motion::Zero => Pos {
+            line: pos.line,
+            col: 0,
+        },
+        Motion::Caret => Pos {
+            line: pos.line,
+            col: first_non_blank(rope, pos.line),
+        },
         Motion::Dollar => {
             let c = line_chars(rope, pos.line);
-            Pos { line: pos.line, col: if c == 0 { 0 } else { c - 1 } }
+            Pos {
+                line: pos.line,
+                col: if c == 0 { 0 } else { c - 1 },
+            }
         }
         Motion::W => (0..n).fold(pos, |p, _| w_one(rope, p, false)),
         Motion::BigW => (0..n).fold(pos, |p, _| w_one(rope, p, true)),
@@ -107,9 +120,11 @@ pub fn apply(rope: &Rope, pos: Pos, m: Motion, count: u32, ctx: &Ctx) -> Pos {
             .unwrap_or(pos),
         Motion::Percent => percent(rope, pos),
         Motion::HalfPageDown => clamp(rope, pos.line + n * (ctx.rows / 2).max(1), pos.col),
-        Motion::HalfPageUp => {
-            clamp(rope, pos.line.saturating_sub(n * (ctx.rows / 2).max(1)), pos.col)
-        }
+        Motion::HalfPageUp => clamp(
+            rope,
+            pos.line.saturating_sub(n * (ctx.rows / 2).max(1)),
+            pos.col,
+        ),
         Motion::PageDown => clamp(rope, pos.line + n * ctx.rows.max(1), pos.col),
         Motion::PageUp => clamp(rope, pos.line.saturating_sub(n * ctx.rows.max(1)), pos.col),
     }
@@ -132,7 +147,10 @@ fn w_one(rope: &Rope, p: Pos, big: bool) -> Pos {
         if line >= last {
             return Pos { line, col };
         }
-        return Pos { line: line + 1, col: 0 };
+        return Pos {
+            line: line + 1,
+            col: 0,
+        };
     }
     loop {
         let text = line_text(rope, line);
@@ -183,7 +201,10 @@ fn w_one(rope: &Rope, p: Pos, big: bool) -> Pos {
             if line >= last {
                 return Pos { line, col };
             }
-            return Pos { line: line + 1, col: 0 };
+            return Pos {
+                line: line + 1,
+                col: 0,
+            };
         }
         while col < len && chars[col].is_whitespace() {
             col += 1;
@@ -215,7 +236,11 @@ fn b_one(rope: &Rope, p: Pos, big: bool) -> Pos {
             col -= 1;
         }
         if col > 0 {
-            let start_kind = if big { true } else { char_is_word(chars[col - 1]) };
+            let start_kind = if big {
+                true
+            } else {
+                char_is_word(chars[col - 1])
+            };
             while col > 0 {
                 let c = chars[col - 1];
                 let same = if big {
@@ -250,7 +275,10 @@ fn e_one(rope: &Rope, p: Pos, big: bool) -> Pos {
     let len = line_chars(rope, line);
     if col >= len.saturating_sub(1) && len > 0 {
         if line >= last {
-            return Pos { line, col: len.saturating_sub(1) };
+            return Pos {
+                line,
+                col: len.saturating_sub(1),
+            };
         }
         line += 1;
         col = 0;
@@ -275,7 +303,10 @@ fn e_one(rope: &Rope, p: Pos, big: bool) -> Pos {
         }
         if col >= chars.len() {
             if line >= last {
-                return Pos { line, col: chars.len() - 1 };
+                return Pos {
+                    line,
+                    col: chars.len() - 1,
+                };
             }
             line += 1;
             col = 0;
@@ -286,7 +317,10 @@ fn e_one(rope: &Rope, p: Pos, big: bool) -> Pos {
         }
         if col >= chars.len() {
             if line >= last {
-                return Pos { line, col: chars.len().saturating_sub(1) };
+                return Pos {
+                    line,
+                    col: chars.len().saturating_sub(1),
+                };
             }
             line += 1;
             col = 0;
@@ -377,7 +411,10 @@ fn find_back(rope: &Rope, p: Pos, c: char, n: usize) -> Option<Pos> {
         if text[i] == c {
             seen += 1;
             if seen == n {
-                return Some(Pos { line: p.line, col: i });
+                return Some(Pos {
+                    line: p.line,
+                    col: i,
+                });
             }
         }
     }
@@ -420,7 +457,10 @@ fn percent(rope: &Rope, p: Pos) -> Pos {
             } else if ch == close {
                 depth -= 1;
                 if depth == 0 {
-                    return Pos { line: p.line, col: j };
+                    return Pos {
+                        line: p.line,
+                        col: j,
+                    };
                 }
             }
         }
@@ -432,7 +472,10 @@ fn percent(rope: &Rope, p: Pos) -> Pos {
             } else if text[j] == open {
                 depth -= 1;
                 if depth == 0 {
-                    return Pos { line: p.line, col: j };
+                    return Pos {
+                        line: p.line,
+                        col: j,
+                    };
                 }
             }
         }
@@ -516,7 +559,10 @@ mod tests {
         let r = rope("one\ntwo\nthree");
         assert_eq!(m(&r, at(2, 3), Motion::GG), at(0, 3));
         assert_eq!(m(&r, at(0, 1), Motion::G), at(2, 1));
-        assert_eq!(apply(&r, at(0, 0), Motion::G, 99, &Ctx::plain(20)), at(2, 0));
+        assert_eq!(
+            apply(&r, at(0, 0), Motion::G, 99, &Ctx::plain(20)),
+            at(2, 0)
+        );
     }
 
     #[test]
@@ -526,7 +572,10 @@ mod tests {
         assert_eq!(m(&r, at(0, 0), Motion::H), at(0, 0));
         assert_eq!(m(&r, at(0, 1), Motion::J), at(1, 1));
         assert_eq!(m(&r, at(0, 0), Motion::K), at(0, 0));
-        assert_eq!(apply(&r, at(0, 0), Motion::J, 50, &Ctx::plain(20)), at(1, 0));
+        assert_eq!(
+            apply(&r, at(0, 0), Motion::J, 50, &Ctx::plain(20)),
+            at(1, 0)
+        );
         assert_eq!(m(&r, at(1, 0), Motion::Zero), at(1, 0));
         assert_eq!(m(&r, at(0, 1), Motion::Dollar), at(0, 1));
     }
@@ -572,13 +621,22 @@ mod tests {
         let text = "l\n".repeat(30);
         let text = text.trim_end();
         let r = rope(text);
-        assert_eq!(apply(&r, at(0, 0), Motion::PageDown, 1, &Ctx::plain(10)), at(10, 0));
+        assert_eq!(
+            apply(&r, at(0, 0), Motion::PageDown, 1, &Ctx::plain(10)),
+            at(10, 0)
+        );
         assert_eq!(
             apply(&r, at(0, 0), Motion::HalfPageDown, 1, &Ctx::plain(10)),
             at(5, 0)
         );
-        assert_eq!(apply(&r, at(0, 0), Motion::PageUp, 1, &Ctx::plain(10)), at(0, 0));
-        assert_eq!(apply(&r, at(29, 0), Motion::PageDown, 1, &Ctx::plain(10)), at(29, 0));
+        assert_eq!(
+            apply(&r, at(0, 0), Motion::PageUp, 1, &Ctx::plain(10)),
+            at(0, 0)
+        );
+        assert_eq!(
+            apply(&r, at(29, 0), Motion::PageDown, 1, &Ctx::plain(10)),
+            at(29, 0)
+        );
     }
 
     #[test]

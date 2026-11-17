@@ -57,7 +57,9 @@ pub fn get() -> crate::Result<String> {
     if let Ok(slot) = CLIP.lock()
         && let Some(clip) = slot.as_ref()
     {
-        return clip.load().map_err(|e| format!("wayland clipboard: {e}").into());
+        return clip
+            .load()
+            .map_err(|e| format!("wayland clipboard: {e}").into());
     }
     #[cfg(unix)]
     {
@@ -82,7 +84,10 @@ fn copy_via_command(bin: &str, args: &[&str], text: &str) -> crate::Result<()> {
         .stderr(Stdio::null())
         .spawn()
         .map_err(|e| format!("{bin}: {e}"))?;
-    let mut stdin = child.stdin.take().ok_or_else(|| format!("{bin}: no stdin"))?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| format!("{bin}: no stdin"))?;
     let written = stdin.write_all(text.as_bytes());
     drop(stdin);
     written.map_err(|e| format!("{bin}: {e}"))?;
@@ -175,10 +180,12 @@ mod e2e_tests {
         fn resumed(&mut self, el: &ActiveEventLoop) {
             let window = Arc::new(el.create_window(WindowAttributes::default()).unwrap());
             super::init(&window);
-            let mut gpu = crate::block_on(crate::render::Gpu::new(window.clone(), el)).expect("gpu");
+            let mut gpu =
+                crate::block_on(crate::render::Gpu::new(window.clone(), el)).expect("gpu");
             gpu.configure(window.inner_size().width, window.inner_size().height);
             let frame = match gpu.surface.get_current_texture() {
-                wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
+                wgpu::CurrentSurfaceTexture::Success(f)
+                | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
                 other => panic!("no surface: {other:?}"),
             };
             let enc = gpu
@@ -195,7 +202,10 @@ mod e2e_tests {
                 .output()
                 .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
                 .unwrap_or_default();
-            let _ = std::process::Command::new("pkill").arg("-x").arg("wl-copy").status();
+            let _ = std::process::Command::new("pkill")
+                .arg("-x")
+                .arg("wl-copy")
+                .status();
             let mut child = std::process::Command::new("wl-copy")
                 .stdin(std::process::Stdio::piped())
                 .spawn()
@@ -212,7 +222,13 @@ mod e2e_tests {
             el.exit();
         }
 
-        fn window_event(&mut self, _el: &ActiveEventLoop, _id: WindowId, _e: winit::event::WindowEvent) {}
+        fn window_event(
+            &mut self,
+            _el: &ActiveEventLoop,
+            _id: WindowId,
+            _e: winit::event::WindowEvent,
+        ) {
+        }
     }
 
     #[test]
@@ -228,7 +244,10 @@ mod e2e_tests {
         let mut h = Harness::default();
         el.run_app(&mut h).unwrap();
         super::shutdown();
-        let _ = std::process::Command::new("pkill").arg("-x").arg("wl-copy").status();
+        let _ = std::process::Command::new("pkill")
+            .arg("-x")
+            .arg("wl-copy")
+            .status();
         let (pasted, loaded) = h.result.expect("harness never ran");
         assert_eq!(pasted, "smithay store works");
         assert_eq!(loaded, "external copy");
@@ -255,7 +274,10 @@ mod command_tests {
         let write = format!("cat > {}", f.display());
         let read = format!("cat {}", f.display());
         copy_via_command("sh", &["-c", &write], "one\ntwo\n").unwrap();
-        assert_eq!(paste_via_command("sh", &["-c", &read]).unwrap(), "one\ntwo\n");
+        assert_eq!(
+            paste_via_command("sh", &["-c", &read]).unwrap(),
+            "one\ntwo\n"
+        );
         let err = copy_via_command("false", &[], "x").unwrap_err().to_string();
         assert!(err.starts_with("false:"));
         let err = paste_via_command("sh", &["-c", "echo bad 1>&2; exit 3"])
@@ -265,4 +287,3 @@ mod command_tests {
         std::fs::remove_file(&f).ok();
     }
 }
-

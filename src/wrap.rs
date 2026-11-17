@@ -166,7 +166,6 @@ impl Wrap {
         (top, sub)
     }
 
-
     /// The `count` screen rows of the viewport whose first row is `view_sub`
     /// rows into line `view_top`. Rows past the last line come back with
     /// `line == rope.len_lines()` so the caller can pad them.
@@ -252,7 +251,10 @@ impl Wrap {
             left -= rows;
         }
         let last = rope.len_lines().saturating_sub(1);
-        (last, self.row_count(&line_text(rope, last)).saturating_sub(1))
+        (
+            last,
+            self.row_count(&line_text(rope, last)).saturating_sub(1),
+        )
     }
 
     /// How many screen rows the whole buffer occupies.
@@ -393,7 +395,9 @@ mod tests {
         let w = Wrap::new(3, 4);
         let rows = w.screen_rows(&r, 0, 0, 4);
         assert_eq!(
-            rows.iter().map(|s| (s.line, s.start, s.end)).collect::<Vec<_>>(),
+            rows.iter()
+                .map(|s| (s.line, s.start, s.end))
+                .collect::<Vec<_>>(),
             vec![(0, 0, 3), (1, 0, 3), (1, 3, 6), (2, 0, 3)]
         );
         assert!(rows[1].first() && !rows[2].first());
@@ -406,7 +410,10 @@ mod tests {
         assert_eq!(w.screen_row(&r, 1, 0, Pos { line: 2, col: 1 }), Some(2));
         let scrolled = w.screen_rows(&r, 1, 1, 2);
         assert_eq!(
-            scrolled.iter().map(|s| (s.line, s.start, s.end)).collect::<Vec<_>>(),
+            scrolled
+                .iter()
+                .map(|s| (s.line, s.start, s.end))
+                .collect::<Vec<_>>(),
             vec![(1, 3, 6), (2, 0, 3)]
         );
         assert_eq!(w.screen_row(&r, 1, 1, Pos { line: 1, col: 0 }), None);

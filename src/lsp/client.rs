@@ -138,10 +138,7 @@ impl LspClient {
     }
 
     pub fn notify(&self, method: &str, params: Value) {
-        let _ = self.wtx.send(WriteReq::Notify(
-            method.to_string(),
-            params,
-        ));
+        let _ = self.wtx.send(WriteReq::Notify(method.to_string(), params));
     }
 
     pub fn request(&mut self, method: &str, params: Value) -> u64 {
@@ -170,9 +167,7 @@ impl LspClient {
             Value::Null,
         ));
         self.next_id += 1;
-        let _ = self
-            .wtx
-            .send(WriteReq::Notify("exit".into(), Value::Null));
+        let _ = self.wtx.send(WriteReq::Notify("exit".into(), Value::Null));
         let _ = self.wtx.send(WriteReq::Shutdown);
         if let Some(c) = &mut self.child {
             let _ = c.kill();

@@ -40,8 +40,8 @@ pub struct Editor {
     pub context_menu: Option<String>,
     pub spell: crate::spell::Spell,
     spell_sig: u64,
+    spell_last: Option<std::time::Instant>,
 }
-
 
 #[derive(PartialEq, Eq, Debug)]
 pub enum Cmd {
@@ -135,6 +135,7 @@ impl Editor {
             context_menu: None,
             spell: crate::spell::Spell::new(),
             spell_sig: 0,
+            spell_last: None,
         };
         if let Some(p) = path {
             match Buffer::load(p) {
@@ -203,9 +204,8 @@ impl Editor {
         let off = SCROLLOFF.min((rows - 1) / 2);
         let wrap = self.wrap();
         let last = self.buf().rope.len_lines().saturating_sub(1);
-        let rows_at = |line: usize| {
-            wrap.row_count(&crate::buffer::line_text(&self.buf().rope, line))
-        };
+        let rows_at =
+            |line: usize| wrap.row_count(&crate::buffer::line_text(&self.buf().rope, line));
         let cursor = self.buf().cursor;
         let mut top = self.buf().view_top.min(last);
         let mut sub = self.buf().view_sub;
@@ -282,7 +282,6 @@ impl Editor {
         b.view_top = top;
         b.view_sub = sub;
     }
-
 
     pub fn clear_pending(&mut self) {
         self.pending = mode::Pending::None;
@@ -370,16 +369,22 @@ impl Editor {
             self.reg_block = true;
         }
         if op != Op::Yank {
+            let mut edits: Vec<(Pos, String, String)> = Vec::new();
             for line in r0..=r1 {
                 let len = line_chars(&self.buf().rope, line);
                 if len <= c0 {
                     continue;
                 }
                 let end = (c1 + 1).min(len);
-                let b = self.buf_mut();
-                let off = b.rope.line_to_char(line);
-                b.rope.remove(off + c0..off + end);
-                b.after_edit();
+                let seg: String = crate::buffer::line_text(&self.buf().rope, line)
+                    .chars()
+                    .skip(c0)
+                    .take(end - c0)
+                    .collect();
+                edits.push((Pos { line, col: c0 }, seg, String::new()));
+            }
+            if !edits.is_empty() {
+                self.buf_mut().replace_all(edits);
             }
         }
         self.mode = Mode::Normal;
@@ -412,7 +417,13 @@ impl Editor {
                 }
             };
             (
-                (Pos { line: a.line, col: 0 }, end),
+                (
+                    Pos {
+                        line: a.line,
+                        col: 0,
+                    },
+                    end,
+                ),
                 true,
             )
         } else {
@@ -426,11 +437,17 @@ impl Editor {
 
     pub fn op_apply(&mut self, op: mode::Operator, (a, b): (Pos, Pos), linewise: bool) {
         use mode::Operator as Op;
-        let last_line =
-            if linewise && b.col == 0 && b.line > a.line { b.line - 1 } else { b.line };
+        let last_line = if linewise && b.col == 0 && b.line > a.line {
+            b.line - 1
+        } else {
+            b.line
+        };
         if matches!(op, Op::Yank | Op::Delete | Op::Change) {
-            let text =
-                self.buf().rope.slice(self.buf().offset_of(a)..self.buf().offset_of(b)).to_string();
+            let text = self
+                .buf()
+                .rope
+                .slice(self.buf().offset_of(a)..self.buf().offset_of(b))
+                .to_string();
             self.set_register(text, linewise);
         }
         match op {
@@ -444,34 +461,12 @@ impl Editor {
                 b.clamp();
             }
             Op::Change => {
-                if !linewise {
-                    self.buf_mut().delete_text(a, b);
-                }
+                self.buf_mut().delete_text(a, b);
                 if linewise {
-                    let cur = a;
-                    let b2 = self.buf_mut();
-                    if cur.line + 1 < b2.rope.len_lines() {
-                        let s = b2.offset_of(Pos {
-                            line: cur.line,
-                            col: 0,
-                        });
-                        let e = b2.offset_of(Pos {
-                            line: cur.line + 1,
-                            col: 0,
-                        });
-                        let text = b2.rope.slice(s..e).to_string();
-                        b2.rope.remove(s..e);
-                        b2.cursor = Pos {
-                            line: cur.line,
-                            col: 0,
-                        };
-                        b2.after_edit();
-                        b2.undo.push(crate::buffer::UndoEntry {
-                            change: crate::buffer::Change::Delete { at: cur, text },
-                            cursor_before: cur,
-                            cursor_after: cur,
-                        });
-                    }
+                    self.buf_mut().cursor = Pos {
+                        line: a.line,
+                        col: 0,
+                    };
                 }
                 self.mode = Mode::Insert;
                 self.coalesce_open = true;
@@ -545,7 +540,7 @@ impl Editor {
     }
 
     pub fn paste(&mut self, after: bool) {
-        let clip = if self.config.clipboard {
+        let clip = if self.config.clipboard && !self.reg_block {
             crate::clipboard::get().ok()
         } else {
             None
@@ -603,7 +598,10 @@ impl Editor {
             self.buf_mut().cursor = at;
             self.buf_mut().insert_text(&text, false);
             let b = self.buf_mut();
-            b.cursor = Pos { line: at.line, col: 0 };
+            b.cursor = Pos {
+                line: at.line,
+                col: 0,
+            };
         } else {
             let c = self.buf().cursor;
             let at = if after {
@@ -664,7 +662,11 @@ impl Editor {
             let len = line_chars(&self.buf().rope, line);
             let next = crate::buffer::line_text(&self.buf().rope, line + 1);
             let stripped = next.trim_start();
-            let glue = if len > 0 && !stripped.is_empty() { " " } else { "" };
+            let glue = if len > 0 && !stripped.is_empty() {
+                " "
+            } else {
+                ""
+            };
             let b = self.buf_mut();
             let s = b.offset_of(Pos { line, col: len });
             let e = b.offset_of(Pos {
@@ -697,8 +699,12 @@ impl Editor {
         let c = self.buf().cursor;
         let len = line_chars(&self.buf().rope, c.line);
         let tw = self.tab_width();
-        let ind = crate::buffer::indent_below(&crate::buffer::line_text(&self.buf().rope, c.line), tw);
-        self.buf_mut().cursor = Pos { line: c.line, col: len };
+        let ind =
+            crate::buffer::indent_below(&crate::buffer::line_text(&self.buf().rope, c.line), tw);
+        self.buf_mut().cursor = Pos {
+            line: c.line,
+            col: len,
+        };
         self.buf_mut().insert_text("\n", false);
         if !ind.is_empty() {
             self.buf_mut().insert_text(&ind, false);
@@ -709,10 +715,17 @@ impl Editor {
     pub fn new_line_above(&mut self) {
         let c = self.buf().cursor;
         let tw = self.tab_width();
-        let ind = crate::buffer::indent_above(&crate::buffer::line_text(&self.buf().rope, c.line), tw);
-        self.buf_mut().cursor = Pos { line: c.line, col: 0 };
+        let ind =
+            crate::buffer::indent_above(&crate::buffer::line_text(&self.buf().rope, c.line), tw);
+        self.buf_mut().cursor = Pos {
+            line: c.line,
+            col: 0,
+        };
         self.buf_mut().insert_text("\n", false);
-        self.buf_mut().cursor = Pos { line: c.line, col: 0 };
+        self.buf_mut().cursor = Pos {
+            line: c.line,
+            col: 0,
+        };
         if !ind.is_empty() {
             self.buf_mut().insert_text(&ind, false);
         }
@@ -781,7 +794,10 @@ impl Editor {
         let ctx = self.motion_ctx(false);
         let (from, to) = {
             let b = self.buf();
-            (b.cursor, crate::motions::apply(&b.rope, b.cursor, m, count, &ctx))
+            (
+                b.cursor,
+                crate::motions::apply(&b.rope, b.cursor, m, count, &ctx),
+            )
         };
         self.prefer_x = None;
         let linewise = matches!(
@@ -857,7 +873,12 @@ impl Editor {
         self.clear_pending();
     }
 
-    pub fn operator_object(&mut self, op: mode::Operator, inner: bool, obj: crate::textobjects::Obj) {
+    pub fn operator_object(
+        &mut self,
+        op: mode::Operator,
+        inner: bool,
+        obj: crate::textobjects::Obj,
+    ) {
         let range = {
             let b = self.buf();
             crate::textobjects::object(&b.rope, b.cursor, inner, obj)
@@ -918,11 +939,7 @@ impl Editor {
             let chars: Vec<char> = b.rope.chars().collect();
             let off = b.offset_of(b.cursor);
             let t: Vec<char> = term.chars().collect();
-            let start = if back {
-                off.saturating_sub(1)
-            } else {
-                off + 1
-            };
+            let start = if back { off.saturating_sub(1) } else { off + 1 };
             let fold = crate::search::ignore_case(term);
             let found = crate::search::find_wrap(&chars, &t, start, back, fold);
             let report = found.map(|at| crate::search::match_report(&chars, &t, at, fold));
@@ -1013,8 +1030,7 @@ impl Editor {
                     Cmd::Quit(bang) => {
                         if self.buf().dirty && !bang {
                             self.set_status(
-                            "E37: No write since last change (add ! to override)"
-                                .to_string(),
+                                "E37: No write since last change (add ! to override)".to_string(),
                                 true,
                             );
                         } else {
@@ -1052,7 +1068,8 @@ impl Editor {
                         let target = match arg {
                             Some(p) => {
                                 let dir = std::path::PathBuf::from(shrink_tilde(&p));
-                                std::env::set_current_dir(dir).and_then(|()| std::env::current_dir())
+                                std::env::set_current_dir(dir)
+                                    .and_then(|()| std::env::current_dir())
                             }
                             None => std::env::current_dir(),
                         };
@@ -1069,15 +1086,16 @@ impl Editor {
                                 .map_err(|e| format!("E116: Invalid regex: {e}"))?;
                             if re.is_match("") {
                                 return Err(
-                                    "E909: pattern must not match the empty string".to_string(),
+                                    "E909: pattern must not match the empty string".to_string()
                                 );
                             }
                             let text = self.buf().rope.to_string();
                             let edits: Vec<(Pos, String, String)> = re
                                 .find_iter(&text)
                                 .map(|m| {
+                                    let chars = self.buf().rope.byte_to_char(m.start());
                                     (
-                                        self.buf().pos_of(m.start()),
+                                        self.buf().pos_of(chars),
                                         m.as_str().to_string(),
                                         repl.clone(),
                                     )
@@ -1128,8 +1146,14 @@ impl Editor {
     pub fn pos_at_cell(&self, drow: usize, xcell: usize) -> Pos {
         let b = self.buf();
         let wrap = self.wrap();
-        let abs =
-            wrap.row_of(&b.rope, Pos { line: b.view_top, col: 0 }) + b.view_sub + drow;
+        let abs = wrap.row_of(
+            &b.rope,
+            Pos {
+                line: b.view_top,
+                col: 0,
+            },
+        ) + b.view_sub
+            + drow;
         let (line, sub) = wrap.anchor(&b.rope, abs);
         let col = wrap.col_at(&b.rope, line, sub, xcell);
         Pos { line, col }
@@ -1141,10 +1165,7 @@ impl Editor {
         let text = line_text(&b.rope, c.line);
         let wordy = |ch: char| ch.is_alphanumeric() || ch == '_';
         let mut on_word = text.chars().nth(c.col).is_some_and(wordy);
-        if !on_word
-            && c.col > 0
-            && text.chars().nth(c.col).is_none()
-        {
+        if !on_word && c.col > 0 && text.chars().nth(c.col).is_none() {
             on_word = text.chars().nth(c.col - 1).is_some_and(wordy);
         }
         let mut items: Vec<(&str, &str)> = Vec::new();
@@ -1246,8 +1267,12 @@ impl Editor {
     }
 
     pub fn comp_accept(&mut self) {
-        let Some(cs) = &self.lsp.completion else { return };
-        let Some(it) = cs.items.get(cs.selected) else { return };
+        let Some(cs) = &self.lsp.completion else {
+            return;
+        };
+        let Some(it) = cs.items.get(cs.selected) else {
+            return;
+        };
         let text = it.text.clone();
         let (line, col) = (cs.line, cs.col);
         self.lsp.completion = None;
@@ -1261,12 +1286,13 @@ impl Editor {
         self.buf_mut().insert_text(&text, co);
     }
 
-    fn activate(&mut self, i: usize) {
+    pub fn activate(&mut self, i: usize) {
         if i != self.active {
             self.lsp.hover = None;
             self.lsp.completion = None;
             self.spell.clear();
             self.spell_sig = 0;
+            self.spell_last = None;
         }
         self.active = i;
     }
@@ -1334,17 +1360,18 @@ impl Editor {
         if !self.config.spellcheck || self.spell.busy() {
             return;
         }
-        let mut h: u64 = 0xcbf29ce484222325;
-        for c in self.buf().rope.chunks() {
-            for b in c.bytes() {
-                h ^= b as u64;
-                h = h.wrapping_mul(0x100000001b3);
-            }
-        }
-        if h == self.spell_sig {
+        let rev = self.buf().revision;
+        if rev == self.spell_sig {
             return;
         }
-        self.spell_sig = h;
+        if self
+            .spell_last
+            .is_some_and(|t| t.elapsed().as_millis() < 500)
+        {
+            return;
+        }
+        self.spell_sig = rev;
+        self.spell_last = Some(std::time::Instant::now());
         let text = self.buf().rope.to_string();
         let dict = self.config.spell_dict.clone();
         self.spell.request(text, dict, proxy);
@@ -1354,6 +1381,7 @@ impl Editor {
         self.config.spellcheck = !self.config.spellcheck;
         if self.config.spellcheck {
             self.spell_sig = 0;
+            self.spell_last = None;
         } else {
             self.spell.clear();
         }
@@ -1382,13 +1410,7 @@ impl Editor {
             crate::fuzzy::Panel::Buffers => self
                 .buffers
                 .iter()
-                .map(|b| {
-                    format!(
-                        "{}{}",
-                        b.display_name(),
-                        if b.dirty { "[+]" } else { "" }
-                    )
-                })
+                .map(|b| format!("{}{}", b.display_name(), if b.dirty { "[+]" } else { "" }))
                 .collect(),
             crate::fuzzy::Panel::Settings => crate::config::SETTINGS
                 .iter()
@@ -1409,9 +1431,9 @@ impl Editor {
 
     pub fn refresh_panel_order(&mut self) {
         let query = match self.panel {
-            crate::fuzzy::Panel::Files => {
-                crate::fuzzy::split_path_query(&self.panel_query).1.to_string()
-            }
+            crate::fuzzy::Panel::Files => crate::fuzzy::split_path_query(&self.panel_query)
+                .1
+                .to_string(),
             _ => self.panel_query.clone(),
         };
         self.panel_order = crate::fuzzy::fuzzy_filter(&self.panel_items, &query);
@@ -1487,6 +1509,7 @@ impl Editor {
                 if key == "spellcheck" {
                     self.spell.clear();
                     self.spell_sig = 0;
+                    self.spell_last = None;
                 }
                 let (theme, warns) = RgbTheme::from_theme_checked(&self.config.theme);
                 self.theme = theme;
@@ -1494,20 +1517,26 @@ impl Editor {
                 let msg = match self.config.save_default() {
                     Ok(p) => {
                         let m = format!("{key} = {val} (saved {})", p.display());
-                        if warns.is_empty() { m } else { format!("{m}; {}", warns.join("; ")) }
+                        if warns.is_empty() {
+                            m
+                        } else {
+                            format!("{m}; {}", warns.join("; "))
+                        }
                     }
                     Err(e) => {
                         let m = format!("{key} = {val} (not saved: {e})");
-                        if warns.is_empty() { m } else { format!("{m}; {}", warns.join("; ")) }
+                        if warns.is_empty() {
+                            m
+                        } else {
+                            format!("{m}; {}", warns.join("; "))
+                        }
                     }
                 };
                 let err = msg.contains("not saved");
                 self.set_status(msg, err);
                 self.panel_items = crate::config::SETTINGS
                     .iter()
-                    .map(|k| {
-                        format!("{} = {}", k, crate::config::setting_value(&self.config, k))
-                    })
+                    .map(|k| format!("{} = {}", k, crate::config::setting_value(&self.config, k)))
                     .collect();
                 self.refresh_panel_order();
             }
@@ -1583,9 +1612,10 @@ impl Editor {
 
 fn shrink_tilde(p: &str) -> String {
     if let Some(rest) = p.strip_prefix("~/")
-        && let Some(home) = std::env::var_os("HOME") {
-            return format!("{}/{rest}", home.to_string_lossy());
-        }
+        && let Some(home) = std::env::var_os("HOME")
+    {
+        return format!("{}/{rest}", home.to_string_lossy());
+    }
     p.to_string()
 }
 
@@ -1850,7 +1880,8 @@ mod tests {
     fn close_active_tab_keeps_neighbor_and_last_close_starts_fresh() {
         let mut ed = Editor::new(None);
         ed.buffers[0] = Buffer::new_file(std::path::Path::new("/tmp/deditor_tab_a"));
-        ed.buffers.push(Buffer::new_file(std::path::Path::new("/tmp/deditor_tab_b")));
+        ed.buffers
+            .push(Buffer::new_file(std::path::Path::new("/tmp/deditor_tab_b")));
         ed.active = 1;
         ed.cmdline = "c".to_string();
         ed.execute_cmdline();
@@ -1879,8 +1910,10 @@ mod tests {
     fn close_tab_by_number_targets_that_tab() {
         let mut ed = Editor::new(None);
         ed.buffers[0] = Buffer::new_file(std::path::Path::new("/tmp/deditor_tab_a"));
-        ed.buffers.push(Buffer::new_file(std::path::Path::new("/tmp/deditor_tab_b")));
-        ed.buffers.push(Buffer::new_file(std::path::Path::new("/tmp/deditor_tab_c")));
+        ed.buffers
+            .push(Buffer::new_file(std::path::Path::new("/tmp/deditor_tab_b")));
+        ed.buffers
+            .push(Buffer::new_file(std::path::Path::new("/tmp/deditor_tab_c")));
         ed.close_buffer(Some(1), false);
         assert_eq!(ed.buffers.len(), 2);
         assert_eq!(ed.buffers[0].display_name(), "deditor_tab_b");
@@ -1939,7 +1972,9 @@ mod tests {
 
     #[test]
     fn pwd_reports_and_changes_the_working_directory() {
-        let _cwd = CWD_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _cwd = CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let dir = std::env::temp_dir().join(format!("deditor_pwd_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let saved = std::env::current_dir().unwrap();
@@ -1962,7 +1997,9 @@ mod tests {
 
     #[test]
     fn files_panel_browses_typed_directories_and_fuzzy_matches_names() {
-        let _cwd = CWD_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _cwd = CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let dir = std::env::temp_dir().join(format!("deditor_panel_{}", std::process::id()));
         std::fs::create_dir_all(dir.join("sub")).unwrap();
         std::fs::write(dir.join("sub").join("target.txt"), "hit\n").unwrap();
@@ -1971,7 +2008,10 @@ mod tests {
         std::env::set_current_dir(&dir).unwrap();
         let mut ed = Editor::new(None);
         ed.open_panel(crate::fuzzy::Panel::Files);
-        assert_eq!(ed.panel_items, vec!["other.txt".to_string(), "sub/".to_string()]);
+        assert_eq!(
+            ed.panel_items,
+            vec!["other.txt".to_string(), "sub/".to_string()]
+        );
         for c in "sub/".chars() {
             ed.panel_type(c);
         }
@@ -2261,7 +2301,9 @@ mod tests {
 
     #[test]
     fn edit_new_file_makes_a_blank_named_buffer_written_on_save() {
-        let _cwd = CWD_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _cwd = CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let dir = std::env::temp_dir().join(format!("deditor_newfile_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let saved = std::env::current_dir().unwrap();
@@ -2316,7 +2358,8 @@ mod tests {
         assert_eq!(b.view_top, 0);
         assert_eq!(b.view_sub, 1);
         assert_eq!(
-            ed.wrap().screen_row(&b.rope, b.view_top, b.view_sub, b.cursor),
+            ed.wrap()
+                .screen_row(&b.rope, b.view_top, b.view_sub, b.cursor),
             Some(2)
         );
     }
@@ -2329,7 +2372,8 @@ mod tests {
         let b = ed.buf();
         assert_eq!((b.view_top, b.view_sub), (35, 0));
         assert_eq!(
-            ed.wrap().screen_row(&b.rope, b.view_top, b.view_sub, b.cursor),
+            ed.wrap()
+                .screen_row(&b.rope, b.view_top, b.view_sub, b.cursor),
             Some(5)
         );
     }
@@ -2342,7 +2386,8 @@ mod tests {
         let b = ed.buf();
         assert_eq!((b.view_top, b.view_sub), (5, 0));
         assert_eq!(
-            ed.wrap().screen_row(&b.rope, b.view_top, b.view_sub, b.cursor),
+            ed.wrap()
+                .screen_row(&b.rope, b.view_top, b.view_sub, b.cursor),
             Some(4)
         );
 
@@ -2366,7 +2411,8 @@ mod tests {
         let b = ed.buf();
         assert_eq!((b.view_top, b.view_sub), (4, 0));
         assert_eq!(
-            ed.wrap().screen_row(&b.rope, b.view_top, b.view_sub, b.cursor),
+            ed.wrap()
+                .screen_row(&b.rope, b.view_top, b.view_sub, b.cursor),
             Some(3)
         );
     }
@@ -2411,7 +2457,9 @@ mod tests {
 
     #[test]
     fn files_panel_reopens_existing_buffer_instead_of_a_new_tab() {
-        let _cwd = CWD_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _cwd = CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let dir = std::env::temp_dir().join(format!("deditor_panel_dup_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("p.txt"), "panel text\n").unwrap();
@@ -2433,4 +2481,47 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    #[test]
+    fn replace_command_handles_length_change_and_unicode() {
+        let mut ed = ed_with("héllo wörld foo bar foo\n");
+        ed.config.clipboard = false;
+        ed.cmdline = "r foo/looooong".to_string();
+        ed.execute_cmdline();
+        assert_eq!(text(&ed), "héllo wörld looooong bar looooong\n");
+        ed.buf_mut().undo();
+        assert_eq!(text(&ed), "héllo wörld foo bar foo\n");
+        ed.buf_mut().redo_action();
+        assert_eq!(text(&ed), "héllo wörld looooong bar looooong\n");
+    }
+
+    #[test]
+    fn linewise_change_deletes_all_selected_lines() {
+        let mut ed = ed_with("one\ntwo\nthree\n");
+        ed.config.clipboard = false;
+        ed.buf_mut().cursor = Pos { line: 0, col: 0 };
+        ed.start_visual(true);
+        ed.buf_mut().cursor = Pos { line: 2, col: 0 };
+        let ((a, b), lw) = ed.sel_range();
+        ed.op_apply(crate::mode::Operator::Change, (a, b), lw);
+        assert_eq!(text(&ed), "");
+        assert_eq!(ed.mode, Mode::Insert);
+        ed.leave_insert();
+        ed.buf_mut().undo();
+        assert_eq!(text(&ed), "one\ntwo\nthree\n");
+    }
+
+    #[test]
+    fn block_delete_is_undoable() {
+        let mut ed = ed_with("aaaa\nbbbb\ncccc\n");
+        ed.config.clipboard = false;
+        ed.start_visual(true);
+        ed.visual_block = true;
+        ed.visual_anchor = Some(Pos { line: 0, col: 1 });
+        ed.buf_mut().cursor = Pos { line: 2, col: 2 };
+        ed.block_apply(crate::mode::Operator::Delete);
+        assert_eq!(text(&ed), "aa\nbb\ncc\n");
+        assert_eq!(ed.register, "aa\nbb\ncc");
+        ed.buf_mut().undo();
+        assert_eq!(text(&ed), "aaaa\nbbbb\ncccc\n");
+    }
 }

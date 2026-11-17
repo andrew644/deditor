@@ -1,6 +1,6 @@
 use nucleo_matcher::{
-    pattern::{CaseMatching, Normalization, Pattern},
     Config, Matcher,
+    pattern::{CaseMatching, Normalization, Pattern},
 };
 use std::path::Path;
 
@@ -17,14 +17,26 @@ pub fn fuzzy_filter(items: &[String], query: &str) -> Vec<usize> {
         return (0..items.len()).collect();
     }
     let mut matcher = Matcher::new(Config::DEFAULT.match_paths());
-    let pattern = Pattern::new(query, CaseMatching::Ignore, Normalization::Smart, nucleo_matcher::pattern::AtomKind::Fuzzy);
+    let pattern = Pattern::new(
+        query,
+        CaseMatching::Ignore,
+        Normalization::Smart,
+        nucleo_matcher::pattern::AtomKind::Fuzzy,
+    );
     let scored = pattern.match_list(items.iter(), &mut matcher);
-    scored.into_iter().map(|(item, _)| {
-        items
+    let mut used = vec![false; items.len()];
+    let mut out = Vec::with_capacity(scored.len());
+    for (item, _) in scored {
+        let idx = items
             .iter()
-            .position(|i| i == item)
-            .expect("matched item came from items")
-    }).collect()
+            .enumerate()
+            .find(|(i, x)| *x == item && !used[*i])
+            .map(|(i, _)| i)
+            .expect("matched item came from items");
+        used[idx] = true;
+        out.push(idx);
+    }
+    out
 }
 
 pub fn split_path_query(q: &str) -> (&str, &str) {
@@ -97,5 +109,13 @@ mod tests {
         assert_eq!(got, vec!["b.txt".to_string(), "sub/".to_string()]);
         assert!(list_dir(&dir.join("missing")).is_empty());
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn duplicate_items_map_to_distinct_indices() {
+        let items = vec!["a/x.txt".to_string(), "b/x.txt".to_string()];
+        let mut got = fuzzy_filter(&items, "x.txt");
+        got.sort();
+        assert_eq!(got, vec![0, 1]);
     }
 }

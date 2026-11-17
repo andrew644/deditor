@@ -12,16 +12,16 @@ use winit::window::Window;
 mod app;
 mod buffer;
 mod clipboard;
-mod fuzzy;
-mod lsp;
-mod motions;
-mod textobjects;
 mod config;
+mod fuzzy;
 mod keys;
+mod lsp;
 mod mode;
+mod motions;
 mod render;
 mod search;
 mod spell;
+mod textobjects;
 mod wrap;
 
 use app::Editor;
@@ -151,9 +151,11 @@ impl ApplicationHandler for App {
         match event {
             WindowEvent::Resized(size) => {
                 if let Some(gpu) = &mut self.gpu
-                    && size.width > 0 && size.height > 0 {
-                        gpu.configure(size.width, size.height);
-                    }
+                    && size.width > 0
+                    && size.height > 0
+                {
+                    gpu.configure(size.width, size.height);
+                }
                 if let Some(w) = &self.window {
                     w.request_redraw();
                 }
@@ -185,7 +187,7 @@ impl ApplicationHandler for App {
                     if let Some(ed) = &mut self.editor {
                         let i = (d - 1) as usize;
                         if i < ed.buffers.len() {
-                            ed.active = i;
+                            ed.activate(i);
                             ed.ensure_lsp();
                         }
                     }
@@ -212,12 +214,13 @@ impl ApplicationHandler for App {
             }
             WindowEvent::Ime(Ime::Commit(s)) => {
                 if let Some(ed) = &mut self.editor
-                    && self.ime_allowed {
-                        ed.buf_mut().insert_text(&s, true);
-                        if let Some(w) = &self.window {
-                            w.request_redraw();
-                        }
+                    && self.ime_allowed
+                {
+                    ed.buf_mut().insert_text(&s, true);
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
                     }
+                }
             }
             WindowEvent::Ime(_) => {}
             WindowEvent::MouseWheel { delta, .. } => {
@@ -268,7 +271,7 @@ impl ApplicationHandler for App {
                     if let Some(i) = hit
                         && i < ed.buffers.len()
                     {
-                        ed.active = i;
+                        ed.activate(i);
                         ed.ensure_lsp();
                     }
                 }
@@ -327,7 +330,6 @@ impl ApplicationHandler for App {
 }
 
 impl App {
-
     fn hit_tab(&self, x: f64, y: f64) -> Option<usize> {
         let ch = self.text.as_ref()?.cell_h.max(1.0);
         if y >= ch as f64 {
@@ -367,8 +369,8 @@ impl App {
         let row = wrap
             .screen_row(&b.rope, b.view_top, b.view_sub, b.cursor)
             .unwrap_or(0);
-        let x = (l.gutter_cols as usize + wrap.pos(&line, b.cursor.col).1) as f64
-            * ts.cell_w as f64;
+        let x =
+            (l.gutter_cols as usize + wrap.pos(&line, b.cursor.col).1) as f64 * ts.cell_w as f64;
         let y = (1 + row) as f64 * ts.cell_h as f64;
         w.set_ime_cursor_area(
             PhysicalPosition::new(x, y),
@@ -386,9 +388,12 @@ impl App {
                 self.text_sig = sig;
             }
         }
-        let (Some(gpu), Some(text), Some(rects), Some(ed)) =
-            (&mut self.gpu, &mut self.text, &mut self.rects, &mut self.editor)
-        else {
+        let (Some(gpu), Some(text), Some(rects), Some(ed)) = (
+            &mut self.gpu,
+            &mut self.text,
+            &mut self.rects,
+            &mut self.editor,
+        ) else {
             return;
         };
         text.viewport.update(
@@ -404,8 +409,7 @@ impl App {
             | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
             other => {
                 let lost = matches!(other, wgpu::CurrentSurfaceTexture::Lost);
-                let reconfigure =
-                    matches!(other, wgpu::CurrentSurfaceTexture::Outdated);
+                let reconfigure = matches!(other, wgpu::CurrentSurfaceTexture::Outdated);
                 drop(other);
                 if lost {
                     let Some(w) = &self.window else { return };
