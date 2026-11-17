@@ -1,10 +1,4 @@
 # TODO
-- Windows - clipboard copy/paste not working
-- Windows - When the .exe is double clicked, it also spawns a terminal window
-- Windows - The config directory should be %LOCALAPPDATA%\deditor\
 - Create readme with every command in every mode.
 - F1 spellcheck enabled/disabled.
-- Add lsp support for odin
-- Add lsp support for c
-- Add lsp support for cpp
 - If you complete all other items, do code review on the codebase and fix tech debt. Don't delete this item.
