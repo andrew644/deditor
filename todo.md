@@ -1,6 +1,5 @@
 # TODO
 - Press a button to make a context menu pop-up on a word. E.g. it shows which keys you can use like gd for go to definition etc. Context aware.
-- A way to close tabs - :c to close current one :c 4 to close 4
 - LINE 1, COL 1 should be 1:1
 - F2 Show whitespace characters
 - F3 toggle dark/light mode

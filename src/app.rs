@@ -50,6 +50,7 @@ pub enum Cmd {
     Goto(usize),
     Pwd(Option<String>),
     Replace(String, String),
+    Close(Option<usize>, bool),
 }
 
 pub fn parse_cmd(s: &str) -> Result<Cmd, String> {
@@ -66,6 +67,11 @@ pub fn parse_cmd(s: &str) -> Result<Cmd, String> {
         ("q", "") => Ok(Cmd::Quit(bang)),
         ("bnext" | "bn", "") => Ok(Cmd::BNext),
         ("bprev" | "bp", "") => Ok(Cmd::BPrev),
+        ("c", "") => Ok(Cmd::Close(None, bang)),
+        ("c", a) => match a.parse::<usize>() {
+            Ok(n) if n > 0 => Ok(Cmd::Close(Some(n), bang)),
+            _ => Err(format!("E475: Invalid argument to :c: {a}")),
+        },
         ("settings", "") => Ok(Cmd::Settings),
         ("pwd", "") => Ok(Cmd::Pwd(None)),
         ("pwd", a) => Ok(Cmd::Pwd(Some(a.to_string()))),
@@ -993,6 +999,7 @@ impl Editor {
                             Err(e) => self.set_status(e, true),
                         }
                     }
+                    Cmd::Close(idx, bang) => self.close_buffer(idx, bang),
                 }
             }
         }
@@ -1113,6 +1120,35 @@ impl Editor {
             self.lsp.completion = None;
         }
         self.active = i;
+    }
+
+    pub fn close_buffer(&mut self, idx: Option<usize>, bang: bool) {
+        let i = match idx {
+            Some(n) => n - 1,
+            None => self.active,
+        };
+        if i >= self.buffers.len() {
+            let shown = idx.unwrap_or(0);
+            self.set_status(format!("E16: Invalid argument: {shown}"), true);
+            return;
+        }
+        if self.buffers[i].dirty && !bang {
+            self.set_status(
+                "E37: No write since last change (add ! to override)".to_string(),
+                true,
+            );
+            return;
+        }
+        let name = self.buffers[i].display_name();
+        self.buffers.remove(i);
+        if self.buffers.is_empty() {
+            self.buffers.push(Buffer::empty());
+        }
+        self.active = self.active.min(self.buffers.len() - 1);
+        self.lsp.hover = None;
+        self.lsp.completion = None;
+        self.ensure_lsp();
+        self.set_status(format!("[{name}] closed"), false);
     }
 
     pub fn poll_lsp(&mut self) {
@@ -1553,6 +1589,61 @@ mod tests {
             parse_cmd("r /x"),
             Err("E116: Invalid arguments to :r: r /x".to_string())
         );
+        assert_eq!(parse_cmd("c"), Ok(Cmd::Close(None, false)));
+        assert_eq!(parse_cmd("c!"), Ok(Cmd::Close(None, true)));
+        assert_eq!(parse_cmd("c 4"), Ok(Cmd::Close(Some(4), false)));
+        assert_eq!(
+            parse_cmd("c 0"),
+            Err("E475: Invalid argument to :c: 0".to_string())
+        );
+        assert_eq!(
+            parse_cmd("c x"),
+            Err("E475: Invalid argument to :c: x".to_string())
+        );
+    }
+
+    #[test]
+    fn close_active_tab_keeps_neighbor_and_last_close_starts_fresh() {
+        let mut ed = Editor::new(None);
+        ed.buffers[0] = Buffer::new_file(std::path::Path::new("/tmp/deditor_tab_a"));
+        ed.buffers.push(Buffer::new_file(std::path::Path::new("/tmp/deditor_tab_b")));
+        ed.active = 1;
+        ed.cmdline = "c".to_string();
+        ed.execute_cmdline();
+        assert_eq!(ed.buffers.len(), 1);
+        assert_eq!(ed.active, 0);
+        assert_eq!(ed.buf().display_name(), "deditor_tab_a");
+        ed.close_buffer(None, false);
+        assert_eq!(ed.buffers.len(), 1);
+        assert!(ed.buffers[0].path.is_none());
+        assert_eq!(ed.buf().rope.to_string(), "");
+    }
+
+    #[test]
+    fn close_dirty_tab_requires_bang() {
+        let mut ed = ed_with("hello\n");
+        ed.close_buffer(None, false);
+        assert!(ed.status_err);
+        assert_eq!(ed.buffers.len(), 1);
+        assert_eq!(ed.buf().rope.to_string(), "hello\n");
+        ed.close_buffer(None, true);
+        assert!(!ed.status_err);
+        assert_eq!(ed.buf().rope.to_string(), "");
+    }
+
+    #[test]
+    fn close_tab_by_number_targets_that_tab() {
+        let mut ed = Editor::new(None);
+        ed.buffers[0] = Buffer::new_file(std::path::Path::new("/tmp/deditor_tab_a"));
+        ed.buffers.push(Buffer::new_file(std::path::Path::new("/tmp/deditor_tab_b")));
+        ed.buffers.push(Buffer::new_file(std::path::Path::new("/tmp/deditor_tab_c")));
+        ed.close_buffer(Some(1), false);
+        assert_eq!(ed.buffers.len(), 2);
+        assert_eq!(ed.buffers[0].display_name(), "deditor_tab_b");
+        assert_eq!(ed.active, 0);
+        ed.close_buffer(Some(9), false);
+        assert!(ed.status_err);
+        assert_eq!(ed.buffers.len(), 2);
     }
 
     #[test]
