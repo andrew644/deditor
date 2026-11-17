@@ -8,6 +8,7 @@ use winit::event_loop::EventLoopProxy;
 #[derive(Default)]
 pub struct Spell {
     pub words: Vec<String>,
+    pub spans: std::collections::HashMap<usize, (u64, Vec<(usize, usize)>)>,
     inflight: Option<Receiver<Vec<String>>>,
 }
 
@@ -23,6 +24,7 @@ impl Spell {
     pub fn clear(&mut self) {
         self.inflight = None;
         self.words.clear();
+        self.spans.clear();
     }
 
     pub fn request(&mut self, text: String, dict: String, proxy: Option<EventLoopProxy<()>>) {
@@ -45,6 +47,7 @@ impl Spell {
         match update {
             Some(Ok(words)) => {
                 self.words = words;
+                self.spans.clear();
                 self.inflight = None;
             }
             Some(Err(TryRecvError::Disconnected)) => self.inflight = None,

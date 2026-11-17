@@ -351,7 +351,10 @@ pub fn draw_content(
                 continue;
             }
             let raw = crate::buffer::line_text(&buf.rope, scr.line);
-            for (col, len) in crate::spell::misspelled_spans(&raw, &ed.spell.words) {
+            let Some((_, spans)) = ed.spell.spans.get(&scr.line) else {
+                continue;
+            };
+            for (col, len) in spans.iter().copied() {
                 if col < scr.start || col >= scr.end {
                     continue;
                 }

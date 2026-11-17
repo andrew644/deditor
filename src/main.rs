@@ -450,6 +450,7 @@ impl App {
         let mut encoder = gpu
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        ed.refresh_spell_spans();
         render::draw_content(gpu, text, rects, ed, &view, &mut encoder);
         gpu.queue.submit(Some(encoder.finish()));
         gpu.queue.present(frame);

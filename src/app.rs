@@ -272,6 +272,37 @@ impl Editor {
         b.view_sub = sub;
     }
 
+    pub fn refresh_spell_spans(&mut self) {
+        use std::hash::{Hash, Hasher};
+        if self.spell.words.is_empty() {
+            self.spell.spans.clear();
+            return;
+        }
+        let last = self.buffers[self.active].rope.len_lines().saturating_sub(1);
+        let start = self.buffers[self.active].view_top.min(last);
+        let end = (self.buffers[self.active].view_top + self.view_rows).min(last);
+        let rope = &self.buffers[self.active].rope;
+        let stale: Vec<(usize, u64, String)> = (start..=end)
+            .filter_map(|line| {
+                let raw = crate::buffer::line_text(rope, line);
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                raw.hash(&mut h);
+                let hv = h.finish();
+                if self.spell.spans.get(&line).is_some_and(|(k, _)| *k == hv) {
+                    None
+                } else {
+                    Some((line, hv, raw.to_string()))
+                }
+            })
+            .collect();
+        let words = &self.spell.words;
+        let cache = &mut self.spell.spans;
+        for (line, hv, raw) in stale {
+            let spans = crate::spell::misspelled_spans(&raw, words);
+            cache.insert(line, (hv, spans));
+        }
+    }
+
     pub fn center_cursor(&mut self, rows: usize) {
         let rows = rows.max(1);
         let wrap = self.wrap();
@@ -2575,5 +2606,24 @@ mod tests {
         ed.paste(true);
         assert_eq!(text(&ed), "ax\nyb");
         assert_eq!(ed.buf().cursor, Pos { line: 1, col: 0 });
+    }
+
+    #[test]
+    fn spell_span_cache_recomputes_edited_lines() {
+        let mut ed = ed_with("teh one\ntwo teh\n");
+        ed.spell.words = vec!["teh".to_string()];
+        ed.refresh_spell_spans();
+        assert_eq!(
+            ed.spell.spans.get(&0).map(|(_, s)| s.clone()),
+            Some(vec![(0, 3)])
+        );
+        ed.buf_mut().cursor = Pos { line: 0, col: 0 };
+        ed.buf_mut()
+            .delete_text(Pos { line: 0, col: 0 }, Pos { line: 0, col: 3 });
+        ed.buf_mut().cursor = Pos { line: 0, col: 0 };
+        ed.buf_mut().insert_text("the", false);
+        ed.refresh_spell_spans();
+        assert_eq!(ed.spell.spans.get(&0).map(|(_, s)| s.clone()), Some(vec![]));
+        assert_eq!(ed.spell.spans.get(&1).map(|(_, s)| s.len()), Some(1));
     }
 }
