@@ -260,15 +260,59 @@ impl ApplicationHandler for App {
                 let Some((mx, my)) = self.last_mouse else {
                     return;
                 };
-                if let Some(i) = self.hit_tab(mx, my) {
-                    if let Some(ed) = &mut self.editor
-                        && i < ed.buffers.len() {
-                            ed.active = i;
-                            ed.ensure_lsp();
-                        }
+                let hit = self.hit_tab(mx, my);
+                if let Some(ed) = &mut self.editor {
+                    ed.context_menu = None;
+                    if let Some(i) = hit
+                        && i < ed.buffers.len()
+                    {
+                        ed.active = i;
+                        ed.ensure_lsp();
+                    }
+                }
+                if let Some(w) = &self.window {
+                    w.request_redraw();
+                }
+            }
+            WindowEvent::MouseInput {
+                button: winit::event::MouseButton::Right,
+                state: ElementState::Pressed,
+                ..
+            } => {
+                let Some(ed) = &mut self.editor else {
+                    return;
+                };
+                if ed.context_menu.take().is_some() {
                     if let Some(w) = &self.window {
                         w.request_redraw();
                     }
+                    return;
+                }
+                let Some((mx, my)) = self.last_mouse else {
+                    return;
+                };
+                let Some(ts) = &self.text else {
+                    return;
+                };
+                let cw = ts.cell_w.max(1.0) as f64;
+                let ch = ts.cell_h.max(1.0) as f64;
+                let screen_row = (my / ch) as i64 - 1;
+                if screen_row < 0 {
+                    return;
+                }
+                let gutter = if ed.config.line_numbers {
+                    ed.buf().rope.len_lines().max(1).to_string().len() + 2
+                } else {
+                    0
+                };
+                let xcell = ((mx / cw) as usize).saturating_sub(gutter);
+                let pos = ed.pos_at_cell(screen_row as usize, xcell);
+                ed.buf_mut().cursor = pos;
+                ed.buf_mut().clamp();
+                let menu = ed.context_menu_text();
+                ed.context_menu = Some(menu);
+                if let Some(w) = &self.window {
+                    w.request_redraw();
                 }
             }
             WindowEvent::CloseRequested => {

@@ -271,6 +271,10 @@ impl LspManager {
             || self.waiting != Wait::None
             || self.last_rx.is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(3))
     }
+
+    pub fn active(&self) -> bool {
+        self.client.is_some()
+    }
 }
 
 impl LspManager {

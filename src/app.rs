@@ -1,4 +1,4 @@
-use crate::buffer::{Buffer, Pos, line_chars};
+use crate::buffer::{Buffer, Pos, line_chars, line_text};
 use crate::config::{Config, RgbTheme};
 use crate::mode::{self, Mode};
 use std::path::Path;
@@ -35,6 +35,7 @@ pub struct Editor {
     pub panel_order: Vec<usize>,
     pub panel_cursor: usize,
     pub lsp: crate::lsp::LspManager,
+    pub context_menu: Option<String>,
 }
 
 
@@ -125,6 +126,7 @@ impl Editor {
             panel_order: Vec::new(),
             panel_cursor: 0,
             lsp: crate::lsp::LspManager::new(),
+            context_menu: None,
         };
         if let Some(p) = path {
             match Buffer::load(p) {
@@ -1029,6 +1031,57 @@ impl Editor {
         self.lsp.ensure(p.as_ref());
     }
 
+    pub fn pos_at_cell(&self, drow: usize, xcell: usize) -> Pos {
+        let b = self.buf();
+        let wrap = self.wrap();
+        let abs =
+            wrap.row_of(&b.rope, Pos { line: b.view_top, col: 0 }) + b.view_sub + drow;
+        let (line, sub) = wrap.anchor(&b.rope, abs);
+        let col = wrap.col_at(&b.rope, line, sub, xcell);
+        Pos { line, col }
+    }
+
+    pub fn context_menu_text(&self) -> String {
+        let b = self.buf();
+        let c = b.cursor;
+        let text = line_text(&b.rope, c.line);
+        let wordy = |ch: char| ch.is_alphanumeric() || ch == '_';
+        let mut on_word = text.chars().nth(c.col).is_some_and(wordy);
+        if !on_word
+            && c.col > 0
+            && text.chars().nth(c.col).is_none()
+        {
+            on_word = text.chars().nth(c.col - 1).is_some_and(wordy);
+        }
+        let mut items: Vec<(&str, &str)> = Vec::new();
+        if on_word {
+            if self.lsp.active() {
+                items.push(("gd", "go to definition"));
+                items.push(("K", "hover docs"));
+            }
+            items.extend([
+                ("*", "find word next"),
+                ("#", "find word prev"),
+                ("viw", "select word"),
+                ("ciw", "change word"),
+                ("diw", "delete word"),
+            ]);
+        } else {
+            items.extend([
+                ("i", "insert"),
+                ("a", "append"),
+                ("o", "new line below"),
+                ("p", "paste"),
+                ("u", "undo"),
+            ]);
+        }
+        items
+            .iter()
+            .map(|(k, d)| format!("{k:<4} {d}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     pub fn hover_cur(&mut self) {
         if let Some(p) = self.buf().path.clone() {
             let c = self.buf().cursor;
@@ -1644,6 +1697,36 @@ mod tests {
         ed.close_buffer(Some(9), false);
         assert!(ed.status_err);
         assert_eq!(ed.buffers.len(), 2);
+    }
+
+    #[test]
+    fn pos_at_cell_maps_screen_cells_through_wraps() {
+        let mut ed = Editor::new(None);
+        let body: String = (0..10).map(|i| format!("line {i}\n")).collect();
+        ed.buf_mut().insert_text(&body, false);
+        assert_eq!(ed.pos_at_cell(0, 0), Pos { line: 0, col: 0 });
+        assert_eq!(ed.pos_at_cell(3, 4), Pos { line: 3, col: 4 });
+        assert_eq!(ed.pos_at_cell(1, 100), Pos { line: 1, col: 5 });
+        let mut wide = Editor::new(None);
+        wide.buf_mut().insert_text(&"x".repeat(200), false);
+        assert_eq!(wide.pos_at_cell(2, 5), Pos { line: 0, col: 165 });
+    }
+
+    #[test]
+    fn context_menu_is_context_aware_at_the_cursor() {
+        let mut ed = ed_with("hello world\n");
+        ed.buf_mut().cursor = Pos { line: 0, col: 2 };
+        let m = ed.context_menu_text();
+        assert!(m.contains("*    find word next"));
+        assert!(m.contains("viw  select word"));
+        assert!(!m.contains("go to definition"));
+        assert!(!m.contains("insert"));
+        ed.buf_mut().cursor = Pos { line: 0, col: 11 };
+        assert!(ed.context_menu_text().contains("find word next"));
+        ed.buf_mut().cursor = Pos { line: 0, col: 5 };
+        let m = ed.context_menu_text();
+        assert!(m.contains("i    insert"));
+        assert!(!m.contains("find word"));
     }
 
     #[test]

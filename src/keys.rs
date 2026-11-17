@@ -17,6 +17,7 @@ fn key_down(ed: &mut Editor, key: &Key, mods: ModifiersState) {
     if is_modifier(key) {
         return;
     }
+    ed.context_menu = None;
     if ed.panel != crate::fuzzy::Panel::None {
         panel_key(ed, key, mods);
         return;
@@ -1036,5 +1037,16 @@ mod tests {
         );
         assert_eq!(ed.buf().rope.to_string(), "two three\n");
         assert_eq!(ed.pending, Pending::None);
+    }
+
+    #[test]
+    fn any_key_press_dismisses_the_context_menu() {
+        let mut ed = Editor::new(None);
+        ed.buf_mut().insert_text("hello\n", false);
+        ed.context_menu = Some("gd   go to definition".to_string());
+        type_keys(&mut ed, &[Key::Named(NamedKey::Shift)]);
+        assert!(ed.context_menu.is_some());
+        type_keys(&mut ed, &[Key::Character("j".into())]);
+        assert!(ed.context_menu.is_none());
     }
 }

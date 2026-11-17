@@ -540,7 +540,8 @@ pub fn draw_content(
         .map(|s| pad_line(&s.replace('\t', "    "), hover_cols))
         .collect::<Vec<_>>()
         .join("\n");
-    let hover_open = !hover_s.is_empty() && ed.panel == crate::fuzzy::Panel::None;
+    let hover_open =
+        !hover_s.is_empty() && ed.panel == crate::fuzzy::Panel::None && ed.context_menu.is_none();
     let mut hover_pos = None;
     if hover_open {
         let nrows = hover_s.lines().count() as f32;
@@ -554,6 +555,27 @@ pub fn draw_content(
             y: hy,
             w: hw,
             h: (nrows + 1.0) * ch,
+            color: theme.popup_bg,
+        });
+    }
+
+    let menu_raw = ed.context_menu.clone().unwrap_or_default();
+    let menu_lines: Vec<String> = menu_raw.lines().map(|s| format!(" {s} ")).collect();
+    let menu_s = menu_lines.join("\n");
+    let menu_open = !menu_s.is_empty() && ed.panel == crate::fuzzy::Panel::None;
+    let mut menu_pos = None;
+    if menu_open {
+        let mcols = menu_lines.iter().map(|s| s.chars().count()).max().unwrap_or(1);
+        let mrows = menu_lines.len() as f32;
+        let mw = mcols as f32 * cw;
+        let mx = cur_x.min(w - mw);
+        let my = ((cursor_row.unwrap_or(0) as f32 + 2.0) * ch).min(h - (mrows + 1.0) * ch);
+        menu_pos = Some((mx, my));
+        overlay.push(rects::RectInstance {
+            x: mx,
+            y: my,
+            w: mw,
+            h: (mrows + 1.0) * ch,
             color: theme.popup_bg,
         });
     }
@@ -657,6 +679,7 @@ pub fn draw_content(
     let mut tb_popup = mkbuf(ts, &popup_s, w, h);
     let mut tb_hover = mkbuf(ts, &hover_s, w, h);
     let mut tb_comp = mkbuf(ts, &comp_s, w, h);
+    let mut tb_menu = mkbuf(ts, &menu_s, w, h);
 
     let areas: Vec<(&mut Buffer, f32, f32, u32)> = vec![
         (
@@ -679,6 +702,9 @@ pub fn draw_content(
     }
     if let Some((cx, cy, _)) = comp_pos {
         oareas.push((&mut tb_comp, cx, cy, theme.popup_fg));
+    }
+    if let Some((mx, my)) = menu_pos {
+        oareas.push((&mut tb_menu, mx, my, theme.popup_fg));
     }
     draw_layer(
         gpu,
