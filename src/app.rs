@@ -1452,7 +1452,7 @@ impl Editor {
     }
 
     pub fn maybe_check_spell(&mut self, proxy: Option<winit::event_loop::EventLoopProxy<()>>) {
-        if !self.config.spellcheck || self.spell.busy() {
+        if !self.config.spellcheck {
             return;
         }
         let rev = self.buf().revision;
