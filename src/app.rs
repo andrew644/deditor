@@ -914,22 +914,7 @@ impl Editor {
                     }
                     Cmd::Edit(path) => {
                         let p = std::path::PathBuf::from(shrink_tilde(&path));
-                        if !p.exists() {
-                            self.buffers[self.active] = Buffer::new_file(&p);
-                            self.set_status("[New File]".to_string(), false);
-                            self.ensure_lsp();
-                        } else {
-                            match Buffer::load(&p) {
-                                Ok(b) => {
-                                    let n = b.rope.len_lines();
-                                    let name = b.display_name();
-                                    self.buffers[self.active] = b;
-                                    self.set_status(format!("\"{name}\" {n}L loaded"), false);
-                                    self.ensure_lsp();
-                                }
-                                Err(e) => self.set_status(e.to_string(), true),
-                            }
-                        }
+                        self.edit_path_in_new_buffer(p);
                     }
                     Cmd::BNext => {
                         if !self.buffers.is_empty() {
@@ -1394,6 +1379,36 @@ impl Editor {
                 let msg = e.to_string();
                 self.set_status(msg, true);
             }
+        }
+    }
+
+    pub fn edit_path_in_new_buffer(&mut self, p: std::path::PathBuf) {
+        if let Some(i) = self.buffers.iter().position(|b| b.path.as_ref() == Some(&p)) {
+            let name = self.buffers[i].display_name();
+            if i != self.active {
+                self.activate(i);
+                self.ensure_lsp();
+            }
+            self.set_status(format!("\"{name}\" already open"), false);
+            return;
+        }
+        if !p.exists() {
+            self.buffers.push(Buffer::new_file(&p));
+            self.activate(self.buffers.len() - 1);
+            self.ensure_lsp();
+            self.set_status("[New File]".to_string(), false);
+            return;
+        }
+        match Buffer::load(&p) {
+            Ok(b) => {
+                let n = b.rope.len_lines();
+                let name = b.display_name();
+                self.buffers.push(b);
+                self.activate(self.buffers.len() - 1);
+                self.ensure_lsp();
+                self.set_status(format!("\"{name}\" {n}L loaded"), false);
+            }
+            Err(e) => self.set_status(e.to_string(), true),
         }
     }
 }
@@ -2030,22 +2045,32 @@ mod tests {
     }
 
     #[test]
-    fn edit_command_replaces_buffer() {
+    fn edit_command_opens_new_buffer() {
         let dir = std::env::temp_dir().join("deditor_cmd_test_e");
         std::fs::create_dir_all(&dir).unwrap();
         let f = dir.join("e.txt");
         std::fs::write(&f, "loaded text\n").unwrap();
-        let mut ed = Editor::new(None);
+        let mut ed = ed_with("working\n");
         ed.cmdline = format!("e {}", f.display());
         ed.execute_cmdline();
+        assert_eq!(ed.buffers.len(), 2);
+        assert_eq!(ed.active, 1);
         assert_eq!(text(&ed), "loaded text\n");
         assert_eq!(ed.buf().display_name(), "e.txt");
         assert!(!ed.buf().dirty);
+        assert_eq!(ed.buffers[0].rope.to_string(), "working\n");
         ed.cmdline = "e /nonexistent/nope.txt".to_string();
         ed.execute_cmdline();
         assert!(!ed.status_err);
+        assert_eq!(ed.buffers.len(), 3);
+        assert_eq!(ed.active, 2);
         assert_eq!(text(&ed), "");
         assert_eq!(ed.buf().display_name(), "nope.txt");
+        ed.cmdline = format!("e {}", f.display());
+        ed.execute_cmdline();
+        assert_eq!(ed.buffers.len(), 3);
+        assert_eq!(ed.active, 1);
+        assert_eq!(ed.status.as_deref(), Some("\"e.txt\" already open"));
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -2061,6 +2086,9 @@ mod tests {
         ed.execute_cmdline();
         assert!(!ed.status_err);
         assert_eq!(ed.status.as_deref(), Some("[New File]"));
+        assert_eq!(ed.buffers.len(), 2);
+        assert_eq!(ed.active, 1);
+        assert_eq!(ed.buffers[0].rope.to_string(), "draft\n");
         assert_eq!(text(&ed), "");
         assert_eq!(ed.buf().display_name(), "blank.txt");
         assert!(!std::fs::exists(dir.join("blank.txt")).unwrap());

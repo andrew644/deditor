@@ -1,5 +1,4 @@
 # TODO
-- :e file.txt should open in a new buffer
 - v selection displays off by one on the right. Selection is correct though.
 - Add box select like nvim with ctrl-v
 - ctrl-p for already opened buffer shoudn't open new tab
