@@ -49,6 +49,7 @@ pub enum Cmd {
     BNext,
     BPrev,
     Settings,
+    Goto(usize),
 }
 
 pub fn parse_cmd(s: &str) -> Result<Cmd, String> {
@@ -68,6 +69,9 @@ pub fn parse_cmd(s: &str) -> Result<Cmd, String> {
         ("settings", "") => Ok(Cmd::Settings),
         ("e" | "edit", a) if !a.is_empty() => Ok(Cmd::Edit(a.to_string())),
         ("e" | "edit", "") => Err("E480: No file name".into()),
+        (_, "") if !head.is_empty() && head.bytes().all(|b| b.is_ascii_digit()) => {
+            Ok(Cmd::Goto(head.parse().unwrap_or(usize::MAX)))
+        }
         _ => Err(format!("E492: Not an editor command: {s}")),
     }
 }
@@ -882,6 +886,15 @@ impl Editor {
                         self.ensure_lsp();
                     }
                     Cmd::Settings => self.open_panel(crate::fuzzy::Panel::Settings),
+                    Cmd::Goto(n) => {
+                        let last = self.buf().rope.len_lines().saturating_sub(1);
+                        let col = self.buf().cursor.col;
+                        self.buf_mut().cursor = Pos {
+                            line: n.saturating_sub(1).min(last),
+                            col,
+                        };
+                        self.buf_mut().clamp();
+                    }
                 }
             }
         }
@@ -1389,6 +1402,28 @@ mod tests {
             parse_cmd("frobnicate"),
             Err("E492: Not an editor command: frobnicate".to_string())
         );
+        assert_eq!(parse_cmd("590"), Ok(Cmd::Goto(590)));
+        assert_eq!(
+            parse_cmd("5x"),
+            Err("E492: Not an editor command: 5x".to_string())
+        );
+    }
+
+    #[test]
+    fn goto_line_command_jumps_and_clamps() {
+        let body: String = (0..1000).map(|i| format!("line {i}\n")).collect();
+        let mut ed = ed_with(&body);
+        ed.cmdline = "590".to_string();
+        ed.execute_cmdline();
+        assert_eq!(ed.buf().cursor.line, 589);
+        assert!(!ed.status_err);
+        ed.cmdline = "2000".to_string();
+        ed.execute_cmdline();
+        assert_eq!(ed.buf().cursor.line, ed.buf().rope.len_lines() - 1);
+        ed.buf_mut().cursor = Pos { line: 0, col: 3 };
+        ed.cmdline = "10".to_string();
+        ed.execute_cmdline();
+        assert_eq!(ed.buf().cursor, Pos { line: 9, col: 3 });
     }
 
     #[test]

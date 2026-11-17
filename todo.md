@@ -1,5 +1,4 @@
 # TODO
-- :590 should jump to line 590.
 - '*' on word should search for word.
 - :pwd to see what directory we are running in
 - :pwd /path to change pwd to /path
