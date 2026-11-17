@@ -1,5 +1,4 @@
 # TODO
-- ctrl-P should do a fuzzy find as the user types a path. So user types ~/ and it will show files in ~/ 
 - Add find and replace command. Like this :r regex/replace_string to change every instance in the file.
 - o on the last line doesn't move the cursor, only creates the new line.
 - dd on the last blank line doesn't delete the line.

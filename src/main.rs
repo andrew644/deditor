@@ -377,7 +377,6 @@ impl App {
         ed.view_cols = (grid.cols as usize)
             .saturating_sub(grid.gutter_cols as usize)
             .max(1);
-        ed.poll_files();
         ed.poll_lsp();
         ed.scroll_to_cursor(grid.rows as usize);
         let lsp_busy = ed.lsp.busy();

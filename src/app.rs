@@ -34,8 +34,6 @@ pub struct Editor {
     pub panel_items: Vec<String>,
     pub panel_order: Vec<usize>,
     pub panel_cursor: usize,
-    pub files_rx: Option<std::sync::mpsc::Receiver<Vec<String>>>,
-    pub file_items: Vec<String>,
     pub lsp: crate::lsp::LspManager,
 }
 
@@ -113,8 +111,6 @@ impl Editor {
             panel_items: Vec::new(),
             panel_order: Vec::new(),
             panel_cursor: 0,
-            files_rx: None,
-            file_items: Vec::new(),
             lsp: crate::lsp::LspManager::new(),
         };
         if let Some(p) = path {
@@ -1104,41 +1100,12 @@ impl Editor {
         }
     }
 
-    pub fn poll_files(&mut self) {
-        let mut done = false;
-        if let Some(rx) = &self.files_rx {
-            match rx.try_recv() {
-                Ok(v) => {
-                    self.file_items = v;
-                    done = true;
-                }
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => done = true,
-                Err(std::sync::mpsc::TryRecvError::Empty) => {}
-            }
-        }
-        if done {
-            self.files_rx = None;
-        }
-        if done && self.panel == crate::fuzzy::Panel::Files {
-            self.panel_items = self.file_items.clone();
-            self.refresh_panel_order();
-        }
-    }
-
     pub fn open_panel(&mut self, kind: crate::fuzzy::Panel) {
-        if kind == crate::fuzzy::Panel::Files
-            && self.file_items.is_empty()
-            && self.files_rx.is_none()
-        {
-            let dir =
-                std::env::current_dir().unwrap_or_else(|_| Path::new(".").to_path_buf());
-            self.files_rx = Some(crate::fuzzy::spawn_file_walk(dir));
-        }
         self.panel = kind;
         self.panel_query.clear();
         self.panel_cursor = 0;
         self.panel_items = match kind {
-            crate::fuzzy::Panel::Files => self.file_items.clone(),
+            crate::fuzzy::Panel::Files => crate::fuzzy::list_dir(&files_root("")),
             crate::fuzzy::Panel::Buffers => self
                 .buffers
                 .iter()
@@ -1168,7 +1135,13 @@ impl Editor {
     }
 
     pub fn refresh_panel_order(&mut self) {
-        self.panel_order = crate::fuzzy::fuzzy_filter(&self.panel_items, &self.panel_query);
+        let query = match self.panel {
+            crate::fuzzy::Panel::Files => {
+                crate::fuzzy::split_path_query(&self.panel_query).1.to_string()
+            }
+            _ => self.panel_query.clone(),
+        };
+        self.panel_order = crate::fuzzy::fuzzy_filter(&self.panel_items, &query);
         if self.panel_order.is_empty() {
             self.panel_cursor = 0;
         } else {
@@ -1176,15 +1149,26 @@ impl Editor {
         }
     }
 
+    fn rescan_files_panel(&mut self) {
+        let (dir, _) = crate::fuzzy::split_path_query(&self.panel_query);
+        self.panel_items = crate::fuzzy::list_dir(&files_root(dir));
+    }
+
     pub fn panel_type(&mut self, c: char) {
         self.panel_query.push(c);
         self.panel_cursor = 0;
+        if self.panel == crate::fuzzy::Panel::Files {
+            self.rescan_files_panel();
+        }
         self.refresh_panel_order();
     }
 
     pub fn panel_backspace(&mut self) {
         self.panel_query.pop();
         self.panel_cursor = 0;
+        if self.panel == crate::fuzzy::Panel::Files {
+            self.rescan_files_panel();
+        }
         self.refresh_panel_order();
     }
 
@@ -1204,11 +1188,18 @@ impl Editor {
         };
         match self.panel {
             crate::fuzzy::Panel::Files => {
-                let rel = self.panel_items[idx].clone();
-                self.close_panel();
-                let dir =
-                    std::env::current_dir().unwrap_or_else(|_| Path::new(".").to_path_buf());
-                self.open_path(dir.join(rel));
+                let name = self.panel_items[idx].clone();
+                let (dir, _) = crate::fuzzy::split_path_query(&self.panel_query);
+                if name.ends_with('/') {
+                    self.panel_query = format!("{dir}{name}");
+                    self.panel_cursor = 0;
+                    self.rescan_files_panel();
+                    self.refresh_panel_order();
+                } else {
+                    let path = files_root(dir).join(&name);
+                    self.close_panel();
+                    self.open_path(path);
+                }
             }
             crate::fuzzy::Panel::Buffers => {
                 self.close_panel();
@@ -1278,6 +1269,15 @@ fn shrink_tilde(p: &str) -> String {
     p.to_string()
 }
 
+fn files_root(dir: &str) -> std::path::PathBuf {
+    let expanded = shrink_tilde(dir);
+    if expanded.is_empty() {
+        std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+    } else {
+        std::path::PathBuf::from(expanded)
+    }
+}
+
 pub fn visual_col(s: &str) -> usize {
     s.chars().count()
 }
@@ -1297,6 +1297,8 @@ mod tests {
     fn text(ed: &Editor) -> String {
         ed.buf().rope.to_string()
     }
+
+    static CWD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
     fn change_inner_word_enters_insert_and_undoes() {
@@ -1487,6 +1489,7 @@ mod tests {
 
     #[test]
     fn pwd_reports_and_changes_the_working_directory() {
+        let _cwd = CWD_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let dir = std::env::temp_dir().join(format!("deditor_pwd_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let saved = std::env::current_dir().unwrap();
@@ -1505,6 +1508,43 @@ mod tests {
         assert_eq!(std::env::current_dir().unwrap(), dir);
         std::env::set_current_dir(&saved).unwrap();
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn files_panel_browses_typed_directories_and_fuzzy_matches_names() {
+        let _cwd = CWD_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let dir = std::env::temp_dir().join(format!("deditor_panel_{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(dir.join("sub").join("target.txt"), "hit\n").unwrap();
+        std::fs::write(dir.join("other.txt"), "x\n").unwrap();
+        let saved = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+        let mut ed = Editor::new(None);
+        ed.open_panel(crate::fuzzy::Panel::Files);
+        assert_eq!(ed.panel_items, vec!["other.txt".to_string(), "sub/".to_string()]);
+        for c in "sub/".chars() {
+            ed.panel_type(c);
+        }
+        assert_eq!(ed.panel_items, vec!["target.txt".to_string()]);
+        for c in "trgt".chars() {
+            ed.panel_type(c);
+        }
+        assert_eq!(ed.panel_order.len(), 1);
+        ed.panel_accept();
+        assert_eq!(ed.buf().display_name(), "target.txt");
+        assert_eq!(text(&ed), "hit\n");
+        assert_eq!(ed.panel, crate::fuzzy::Panel::None);
+        std::env::set_current_dir(&saved).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn files_root_expands_tilde_and_defaults_to_cwd() {
+        if let Some(home) = std::env::var_os("HOME") {
+            assert_eq!(files_root("~/"), std::path::PathBuf::from(home));
+            assert_eq!(files_root("~/src/"), files_root("~/").join("src").join(""));
+        }
+        assert_eq!(files_root(""), std::env::current_dir().unwrap());
     }
 
     #[test]
@@ -1727,6 +1767,7 @@ mod tests {
 
     #[test]
     fn edit_new_file_makes_a_blank_named_buffer_written_on_save() {
+        let _cwd = CWD_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let dir = std::env::temp_dir().join(format!("deditor_newfile_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let saved = std::env::current_dir().unwrap();
