@@ -146,6 +146,17 @@ pub fn config_path() -> PathBuf {
     if let Ok(p) = std::env::var("DEDITOR_CONFIG") {
         return PathBuf::from(p);
     }
+    #[cfg(windows)]
+    let base = std::env::var_os("LOCALAPPDATA")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("USERPROFILE")
+                .filter(|v| !v.is_empty())
+                .map(PathBuf::from)
+        })
+        .unwrap_or_else(|| PathBuf::from("."));
+    #[cfg(not(windows))]
     let base = match std::env::var_os("XDG_CONFIG_HOME") {
         Some(v) if !v.is_empty() => PathBuf::from(v),
         _ => {
