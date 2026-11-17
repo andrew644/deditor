@@ -67,7 +67,9 @@ fn main() -> Result<()> {
         proxy: Some(event_loop.create_proxy()),
         pump_armed: false,
     };
-    event_loop.run_app(&mut app)?;
+    let res = event_loop.run_app(&mut app);
+    clipboard::shutdown();
+    res?;
     Ok(())
 }
 
@@ -96,10 +98,12 @@ impl ApplicationHandler for App {
             .with_inner_size(LogicalSize::new(1280.0, 800.0))
             .with_title("deditor");
         let window = Arc::new(event_loop.create_window(attrs).unwrap());
+        clipboard::init(&window);
         let mut gpu = match block_on(Gpu::new(window.clone(), event_loop)) {
             Ok(g) => g,
             Err(e) => {
                 eprintln!("deditor: {e}");
+                clipboard::shutdown();
                 event_loop.exit();
                 return;
             }
@@ -194,6 +198,7 @@ impl ApplicationHandler for App {
                 if let Some(ed) = &mut self.editor {
                     keys::on_key(ed, &event, self.mods);
                     if ed.quit {
+                        clipboard::shutdown();
                         event_loop.exit();
                         return;
                     }
@@ -266,7 +271,10 @@ impl ApplicationHandler for App {
                     }
                 }
             }
-            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::CloseRequested => {
+                clipboard::shutdown();
+                event_loop.exit();
+            }
             _ => {}
         }
     }

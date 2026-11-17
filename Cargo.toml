@@ -19,6 +19,7 @@ regex = "1"
 [target.'cfg(unix)'.dependencies]
 winit = { version = "0.30.13", default-features = false, features = ["rwh_06", "wayland", "wayland-dlopen", "wayland-csd-adwaita"] }
 wgpu = { version = "30.0.2", default-features = false, features = ["std", "wgsl", "vulkan"] }
+smithay-clipboard = "0.7.3"
 
 [target.'cfg(windows)'.dependencies]
 winit = { version = "0.30.13", default-features = false, features = ["rwh_06"] }
