@@ -133,7 +133,9 @@ fn quote_obj(rope: &Rope, line: usize, col: usize, q: char, inner: bool) -> Opti
     }
     let base = rope.line_to_char(line);
     if col < text.len() && text[col] == q {
-        if let Some(b) = (0..col).rev().find(|&i| text[i] == q) {
+        let before = (0..col).filter(|&i| text[i] == q).count();
+        if before % 2 == 1 {
+            let b = (0..col).rev().find(|&i| text[i] == q)?;
             return Some(if inner {
                 (base + b + 1, base + col)
             } else {

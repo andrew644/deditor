@@ -274,8 +274,7 @@ impl Editor {
 
     pub fn refresh_spell_spans(&mut self) {
         use std::hash::{Hash, Hasher};
-        if self.spell.words.is_empty() {
-            self.spell.spans.clear();
+        if self.spell.words.is_empty() && self.spell.spans.is_empty() {
             return;
         }
         let last = self.buffers[self.active].rope.len_lines().saturating_sub(1);
@@ -472,6 +471,9 @@ impl Editor {
 
     pub fn op_apply(&mut self, op: mode::Operator, (a, b): (Pos, Pos), linewise: bool) {
         use mode::Operator as Op;
+        if !linewise && a >= b {
+            return;
+        }
         let last_line = if linewise && b.col == 0 && b.line > a.line {
             b.line - 1
         } else {
@@ -839,12 +841,27 @@ impl Editor {
                 | M::LineUp
                 | M::GG
                 | M::G
+                | M::ToLine(_)
                 | M::PageDown
                 | M::PageUp
                 | M::HalfPageDown
                 | M::HalfPageUp
         );
-        if from == to && !linewise {
+        if m == M::L {
+            let len = line_chars(&self.buf().rope, from.line);
+            let bnd = Pos {
+                line: from.line,
+                col: (from.col + count.max(1) as usize).min(len),
+            };
+            if bnd == from {
+                self.clear_pending();
+                return;
+            }
+            self.op_apply(op, (from, bnd), false);
+            self.clear_pending();
+            return;
+        }
+        if from == to && !linewise && !matches!(m, M::Dollar | M::E | M::BigE) {
             self.clear_pending();
             return;
         }
@@ -1131,7 +1148,6 @@ impl Editor {
                                     "E909: pattern must not match the empty string".to_string()
                                 );
                             }
-
                             if edits.is_empty() {
                                 return Err(format!("E486: Pattern not found: {pat}"));
                             }

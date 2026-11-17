@@ -1600,4 +1600,72 @@ mod tests {
         assert_eq!(ed.mode, Mode::Normal);
         assert_eq!(ed.buf().cursor, Pos { line: 0, col: 4 });
     }
+
+    #[test]
+    fn d_count_g_deletes_whole_lines() {
+        let mut ed = Editor::new(None);
+        ed.config.clipboard = false;
+        ed.buf_mut()
+            .insert_text("one\ntwo\nthree\nfour\nfive\n", false);
+        ed.buf_mut().cursor = Pos { line: 2, col: 1 };
+        type_keys(&mut ed, &["d", "5", "G"].map(|s| Key::Character(s.into())));
+        assert_eq!(ed.buf().rope.to_string(), "one\ntwo\n");
+        assert!(ed.reg_linewise);
+        assert_eq!(ed.register, "three\nfour\nfive\n");
+    }
+
+    #[test]
+    fn x_deletes_last_char_of_line() {
+        let mut ed = Editor::new(None);
+        ed.config.clipboard = false;
+        ed.buf_mut().insert_text("abcd", false);
+        ed.buf_mut().cursor = Pos { line: 0, col: 3 };
+        type_keys(&mut ed, &[Key::Character("x".into())]);
+        assert_eq!(ed.buf().rope.to_string(), "abc");
+        assert_eq!(ed.register, "d");
+    }
+
+    #[test]
+    fn x_count_clamps_at_line_end() {
+        let mut ed = Editor::new(None);
+        ed.config.clipboard = false;
+        ed.buf_mut().insert_text("abcd", false);
+        ed.buf_mut().cursor = Pos { line: 0, col: 1 };
+        type_keys(&mut ed, &["3", "x"].map(|s| Key::Character(s.into())));
+        assert_eq!(ed.buf().rope.to_string(), "a");
+    }
+
+    #[test]
+    fn d_dollar_on_last_char_deletes_it() {
+        let mut ed = Editor::new(None);
+        ed.config.clipboard = false;
+        ed.buf_mut().insert_text("ab", false);
+        ed.buf_mut().cursor = Pos { line: 0, col: 1 };
+        type_keys(&mut ed, &["d", "$"].map(|s| Key::Character(s.into())));
+        assert_eq!(ed.buf().rope.to_string(), "a");
+    }
+
+    #[test]
+    fn ci_quote_targets_second_string_opener() {
+        let mut ed = Editor::new(None);
+        ed.config.clipboard = false;
+        ed.buf_mut().insert_text("foo(\"a\", \"b\")", false);
+        ed.buf_mut().cursor = Pos { line: 0, col: 9 };
+        type_keys(&mut ed, &["c", "i", "\""].map(|s| Key::Character(s.into())));
+        assert_eq!(ed.buf().rope.to_string(), "foo(\"a\", \"\")");
+        assert_eq!(ed.mode, Mode::Insert);
+    }
+
+    #[test]
+    fn empty_text_object_keeps_register() {
+        let mut ed = Editor::new(None);
+        ed.config.clipboard = false;
+        ed.buf_mut().insert_text("x = \"\"", false);
+        ed.register = "keep".into();
+        ed.buf_mut().cursor = Pos { line: 0, col: 4 };
+        type_keys(&mut ed, &["d", "i", "\""].map(|s| Key::Character(s.into())));
+        assert_eq!(ed.buf().rope.to_string(), "x = \"\"");
+        assert_eq!(ed.register, "keep");
+        assert_eq!(ed.mode, Mode::Normal);
+    }
 }
