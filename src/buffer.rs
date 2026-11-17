@@ -135,6 +135,13 @@ impl Buffer {
         })
     }
 
+    pub fn new_file(path: &Path) -> Self {
+        Self {
+            path: Some(path.to_path_buf()),
+            ..Self::empty()
+        }
+    }
+
     pub fn save(&self) -> crate::Result<()> {
         let path = self.path.as_ref().ok_or("no file name")?;
         self.save_as(path)

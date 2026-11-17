@@ -894,15 +894,21 @@ impl Editor {
                     }
                     Cmd::Edit(path) => {
                         let p = std::path::PathBuf::from(shrink_tilde(&path));
-                        match Buffer::load(&p) {
-                            Ok(b) => {
-                                let n = b.rope.len_lines();
-                                let name = b.display_name();
-                                self.buffers[self.active] = b;
-                                self.set_status(format!("\"{name}\" {n}L loaded"), false);
-                                self.ensure_lsp();
+                        if !p.exists() {
+                            self.buffers[self.active] = Buffer::new_file(&p);
+                            self.set_status("[New File]".to_string(), false);
+                            self.ensure_lsp();
+                        } else {
+                            match Buffer::load(&p) {
+                                Ok(b) => {
+                                    let n = b.rope.len_lines();
+                                    let name = b.display_name();
+                                    self.buffers[self.active] = b;
+                                    self.set_status(format!("\"{name}\" {n}L loaded"), false);
+                                    self.ensure_lsp();
+                                }
+                                Err(e) => self.set_status(e.to_string(), true),
                             }
-                            Err(e) => self.set_status(e.to_string(), true),
                         }
                     }
                     Cmd::BNext => {
@@ -1713,7 +1719,35 @@ mod tests {
         assert!(!ed.buf().dirty);
         ed.cmdline = "e /nonexistent/nope.txt".to_string();
         ed.execute_cmdline();
-        assert!(ed.status_err);
+        assert!(!ed.status_err);
+        assert_eq!(text(&ed), "");
+        assert_eq!(ed.buf().display_name(), "nope.txt");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn edit_new_file_makes_a_blank_named_buffer_written_on_save() {
+        let dir = std::env::temp_dir().join(format!("deditor_newfile_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let saved = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+        let mut ed = ed_with("draft\n");
+        ed.cmdline = "e blank.txt".to_string();
+        ed.execute_cmdline();
+        assert!(!ed.status_err);
+        assert_eq!(ed.status.as_deref(), Some("[New File]"));
+        assert_eq!(text(&ed), "");
+        assert_eq!(ed.buf().display_name(), "blank.txt");
+        assert!(!std::fs::exists(dir.join("blank.txt")).unwrap());
+        ed.buf_mut().insert_text("hello\n", false);
+        ed.cmdline = "w".to_string();
+        ed.execute_cmdline();
+        assert!(!ed.status_err);
+        assert_eq!(
+            std::fs::read_to_string(dir.join("blank.txt")).unwrap(),
+            "hello\n"
+        );
+        std::env::set_current_dir(&saved).unwrap();
         std::fs::remove_dir_all(&dir).ok();
     }
 
