@@ -341,17 +341,15 @@ impl LspManager {
                 msgs.push(m);
             }
         }
-        if self.waiting != Wait::None
+        let timed_out = self.waiting != Wait::None
             && self
                 .waiting_since
-                .is_some_and(|t| t.elapsed() > std::time::Duration::from_secs(15))
-        {
+                .is_some_and(|t| t.elapsed() > std::time::Duration::from_secs(15));
+        if timed_out {
             self.waiting = Wait::None;
             self.waiting_id = None;
             self.waiting_since = None;
-            return vec![Ev::Timeout];
         }
-
         if !msgs.is_empty() {
             self.last_rx = Some(std::time::Instant::now());
         }
@@ -448,6 +446,10 @@ impl LspManager {
                 }
             }
         }
+        if timed_out {
+            evs.push(Ev::Timeout);
+        }
+
         evs
     }
 }

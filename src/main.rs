@@ -409,7 +409,10 @@ impl App {
                 drop(other);
                 if lost {
                     let Some(w) = &self.window else { return };
-                    gpu.surface = gpu.instance.create_surface(w.clone()).unwrap();
+                    let Ok(s) = gpu.instance.create_surface(w.clone()) else {
+                        return;
+                    };
+                    gpu.surface = s;
                     gpu.configure(gpu.config.width, gpu.config.height);
                     w.request_redraw();
                     return;
