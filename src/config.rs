@@ -9,46 +9,44 @@ pub fn parse_hex(s: &str) -> Option<u32> {
     let v = u32::from_str_radix(h, 16).ok()?;
     Some(0xFF00_0000 | v)
 }
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct Theme {
-    pub fg: String,
-    pub bg: String,
-    pub gutter_fg: String,
-    pub selection: String,
-    pub cursorline: String,
-    pub tab_active: String,
-    pub tab_inactive: String,
-    pub status_bg: String,
-    pub accent: String,
-    pub error: String,
-    pub warn: String,
-    pub popup_bg: String,
-    pub popup_fg: String,
-    pub popup_sel: String,
-}
-
-impl Default for Theme {
-    fn default() -> Self {
-        Self {
-            fg: "#d8d8da".into(),
-            bg: "#1c1c20".into(),
-            gutter_fg: "#6a6a72".into(),
-            cursorline: "#2a2b33".into(),
-            selection: "#3a3d4a".into(),
-            tab_active: "#2f3240".into(),
-            tab_inactive: "#22232a".into(),
-            status_bg: "#2a2b33".into(),
-            accent: "#7aa2f7".into(),
-            error: "#f7768e".into(),
-            warn: "#e0af68".into(),
-            popup_bg: "#26262e".into(),
-            popup_fg: "#d8d8da".into(),
-            popup_sel: "#3f4a5f".into(),
+macro_rules! for_each_theme_color {
+    ($mac:ident) => {
+        $mac! {
+            [fg, "#d8d8da", 0xFFD8D8DA],
+            [bg, "#1c1c20", 0xFF1C1C20],
+            [gutter_fg, "#6a6a72", 0xFF6A6A72],
+            [selection, "#3a3d4a", 0xFF3A3D4A],
+            [cursorline, "#2a2b33", 0xFF2A2B33],
+            [tab_active, "#2f3240", 0xFF2F3240],
+            [tab_inactive, "#22232a", 0xFF22232A],
+            [status_bg, "#2a2b33", 0xFF2A2B33],
+            [accent, "#7aa2f7", 0xFF7AA2F7],
+            [error, "#f7768e", 0xFFF7768E],
+            [warn, "#e0af68", 0xFFE0AF68],
+            [popup_bg, "#26262e", 0xFF26262E],
+            [popup_fg, "#d8d8da", 0xFFD8D8DA],
+            [popup_sel, "#3f4a5f", 0xFF3F4A5F]
         }
-    }
+    };
 }
+
+macro_rules! theme_items {
+    ($([$n:ident, $h:literal, $r:literal]),*) => {
+        #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+        #[serde(default)]
+        pub struct Theme {
+            $(pub $n: String,)*
+        }
+
+        impl Default for Theme {
+            fn default() -> Self {
+                Self { $($n: $h.into(),)* }
+            }
+        }
+    };
+}
+
+for_each_theme_color!(theme_items);
 
 fn flip_hex(s: &str) -> String {
     let Some(v) = parse_hex(s) else {
@@ -64,27 +62,46 @@ fn flip_hex(s: &str) -> String {
     format!("#{v:06x}")
 }
 
-/// Mirrors every near-neutral color around mid gray so the palette swaps
-/// between dark and light. Saturated accents keep their identity, and the
-/// transform is its own inverse.
-pub fn flip_lightness(t: &Theme) -> Theme {
-    Theme {
-        fg: flip_hex(&t.fg),
-        bg: flip_hex(&t.bg),
-        gutter_fg: flip_hex(&t.gutter_fg),
-        selection: flip_hex(&t.selection),
-        cursorline: flip_hex(&t.cursorline),
-        tab_active: flip_hex(&t.tab_active),
-        tab_inactive: flip_hex(&t.tab_inactive),
-        status_bg: flip_hex(&t.status_bg),
-        accent: flip_hex(&t.accent),
-        error: flip_hex(&t.error),
-        warn: flip_hex(&t.warn),
-        popup_bg: flip_hex(&t.popup_bg),
-        popup_fg: flip_hex(&t.popup_fg),
-        popup_sel: flip_hex(&t.popup_sel),
-    }
+macro_rules! theme_functions {
+    ($([$n:ident, $h:literal, $r:literal]),*) => {
+        pub struct RgbTheme {
+            $(pub $n: u32,)*
+        }
+
+        /// Mirrors every near-neutral color around mid gray so the palette swaps
+        /// between dark and light. Saturated accents keep their identity, and the
+        /// transform is its own inverse.
+        pub fn flip_lightness(t: &Theme) -> Theme {
+            Theme { $($n: flip_hex(&t.$n),)* }
+        }
+
+        impl RgbTheme {
+            pub fn from_theme_checked(t: &Theme) -> (Self, Vec<String>) {
+                let mut w = Vec::new();
+                let s = Self {
+                    $($n: hex_checked(&t.$n, stringify!($n), $r, &mut w),)*
+                };
+                (s, w)
+            }
+        }
+
+        pub fn theme_color<'a>(t: &'a Theme, name: &str) -> Option<&'a str> {
+            Some(match name {
+                $(stringify!($n) => &t.$n,)*
+                _ => return None,
+            })
+        }
+
+        pub fn theme_color_mut<'a>(t: &'a mut Theme, name: &str) -> Option<&'a mut String> {
+            Some(match name {
+                $(stringify!($n) => &mut t.$n,)*
+                _ => return None,
+            })
+        }
+    };
 }
+
+for_each_theme_color!(theme_functions);
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -190,23 +207,6 @@ pub fn load() -> (Config, Vec<String>) {
     }
 }
 
-pub struct RgbTheme {
-    pub fg: u32,
-    pub bg: u32,
-    pub gutter_fg: u32,
-    pub selection: u32,
-    pub cursorline: u32,
-    pub tab_active: u32,
-    pub tab_inactive: u32,
-    pub status_bg: u32,
-    pub accent: u32,
-    pub error: u32,
-    pub warn: u32,
-    pub popup_bg: u32,
-    pub popup_fg: u32,
-    pub popup_sel: u32,
-}
-
 fn hex_checked(raw: &str, name: &str, def: u32, warnings: &mut Vec<String>) -> u32 {
     match parse_hex(raw) {
         Some(v) => v,
@@ -214,29 +214,6 @@ fn hex_checked(raw: &str, name: &str, def: u32, warnings: &mut Vec<String>) -> u
             warnings.push(format!("invalid theme.{name} color {raw:?}, using default"));
             def
         }
-    }
-}
-
-impl RgbTheme {
-    pub fn from_theme_checked(t: &Theme) -> (Self, Vec<String>) {
-        let mut w = Vec::new();
-        let s = Self {
-            fg: hex_checked(&t.fg, "fg", 0xFFD8D8DA, &mut w),
-            bg: hex_checked(&t.bg, "bg", 0xFF1C1C20, &mut w),
-            gutter_fg: hex_checked(&t.gutter_fg, "gutter_fg", 0xFF6A6A72, &mut w),
-            cursorline: hex_checked(&t.cursorline, "cursorline", 0xFF2A2B33, &mut w),
-            selection: hex_checked(&t.selection, "selection", 0xFF3A3D4A, &mut w),
-            tab_active: hex_checked(&t.tab_active, "tab_active", 0xFF2F3240, &mut w),
-            tab_inactive: hex_checked(&t.tab_inactive, "tab_inactive", 0xFF22232A, &mut w),
-            status_bg: hex_checked(&t.status_bg, "status_bg", 0xFF2A2B33, &mut w),
-            accent: hex_checked(&t.accent, "accent", 0xFF7AA2F7, &mut w),
-            error: hex_checked(&t.error, "error", 0xFFF7768E, &mut w),
-            warn: hex_checked(&t.warn, "warn", 0xFFE0AF68, &mut w),
-            popup_bg: hex_checked(&t.popup_bg, "popup_bg", 0xFF26262E, &mut w),
-            popup_fg: hex_checked(&t.popup_fg, "popup_fg", 0xFFD8D8DA, &mut w),
-            popup_sel: hex_checked(&t.popup_sel, "popup_sel", 0xFF3F4A5F, &mut w),
-        };
-        (s, w)
     }
 }
 
@@ -253,69 +230,22 @@ pub const PALETTE: [&str; 12] = [
     "#f7768e", "#e0af68", "#26262e", "#3f4a5f",
 ];
 
-pub const SETTINGS: [&str; 21] = [
-    "font.family",
-    "font.size",
-    "tab_width",
-    "line_numbers",
-    "clipboard",
-    "show_whitespace",
-    "spellcheck",
-    "theme.fg",
-    "theme.bg",
-    "theme.gutter_fg",
-    "theme.selection",
-    "theme.cursorline",
-    "theme.tab_active",
-    "theme.tab_inactive",
-    "theme.status_bg",
-    "theme.accent",
-    "theme.error",
-    "theme.warn",
-    "theme.popup_bg",
-    "theme.popup_fg",
-    "theme.popup_sel",
-];
-
-pub fn theme_color<'a>(t: &'a Theme, name: &str) -> Option<&'a str> {
-    Some(match name {
-        "fg" => &t.fg,
-        "bg" => &t.bg,
-        "gutter_fg" => &t.gutter_fg,
-        "selection" => &t.selection,
-        "cursorline" => &t.cursorline,
-        "tab_active" => &t.tab_active,
-        "tab_inactive" => &t.tab_inactive,
-        "status_bg" => &t.status_bg,
-        "accent" => &t.accent,
-        "error" => &t.error,
-        "warn" => &t.warn,
-        "popup_bg" => &t.popup_bg,
-        "popup_fg" => &t.popup_fg,
-        "popup_sel" => &t.popup_sel,
-        _ => return None,
-    })
+macro_rules! theme_settings {
+    ($([$n:ident, $h:literal, $r:literal]),*) => {
+        pub const SETTINGS: [&str; 21] = [
+            "font.family",
+            "font.size",
+            "tab_width",
+            "line_numbers",
+            "clipboard",
+            "show_whitespace",
+            "spellcheck",
+            $(concat!("theme.", stringify!($n)),)*
+        ];
+    };
 }
 
-pub fn theme_color_mut<'a>(t: &'a mut Theme, name: &str) -> Option<&'a mut String> {
-    Some(match name {
-        "fg" => &mut t.fg,
-        "bg" => &mut t.bg,
-        "gutter_fg" => &mut t.gutter_fg,
-        "selection" => &mut t.selection,
-        "cursorline" => &mut t.cursorline,
-        "tab_active" => &mut t.tab_active,
-        "tab_inactive" => &mut t.tab_inactive,
-        "status_bg" => &mut t.status_bg,
-        "accent" => &mut t.accent,
-        "error" => &mut t.error,
-        "warn" => &mut t.warn,
-        "popup_bg" => &mut t.popup_bg,
-        "popup_fg" => &mut t.popup_fg,
-        "popup_sel" => &mut t.popup_sel,
-        _ => return None,
-    })
-}
+for_each_theme_color!(theme_settings);
 
 fn next_in<T: PartialEq + Clone>(list: &[T], cur: &T) -> T {
     match list.iter().position(|v| v == cur) {
