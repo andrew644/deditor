@@ -1317,13 +1317,17 @@ impl Editor {
         self.buf_mut().insert_text(&text, co);
     }
 
+    fn reset_buffer_state(&mut self) {
+        self.lsp.hover = None;
+        self.lsp.completion = None;
+        self.spell.clear();
+        self.spell_sig = u64::MAX;
+        self.spell_last = None;
+    }
+
     pub fn activate(&mut self, i: usize) {
         if i != self.active {
-            self.lsp.hover = None;
-            self.lsp.completion = None;
-            self.spell.clear();
-            self.spell_sig = u64::MAX;
-            self.spell_last = None;
+            self.reset_buffer_state();
         }
         self.active = i;
     }
@@ -1355,9 +1359,10 @@ impl Editor {
         } else {
             self.active.min(self.buffers.len() - 1)
         };
+        if i == self.active {
+            self.reset_buffer_state();
+        }
         self.activate(next);
-        self.lsp.hover = None;
-        self.lsp.completion = None;
         self.ensure_lsp();
         self.set_status(format!("[{name}] closed"), false);
     }
@@ -1597,7 +1602,7 @@ impl Editor {
                 };
                 if empty_cur {
                     self.buffers[self.active] = b;
-                    self.lsp.hover = None;
+                    self.reset_buffer_state();
                 } else {
                     self.buffers.push(b);
                     self.activate(self.buffers.len() - 1);
@@ -2625,5 +2630,44 @@ mod tests {
         ed.refresh_spell_spans();
         assert_eq!(ed.spell.spans.get(&0).map(|(_, s)| s.clone()), Some(vec![]));
         assert_eq!(ed.spell.spans.get(&1).map(|(_, s)| s.len()), Some(1));
+    }
+
+    #[test]
+    fn closing_active_buffer_clears_per_buffer_state() {
+        let mut ed = Editor::new(None);
+        ed.config.clipboard = false;
+        ed.buf_mut().insert_text("aaa", false);
+        ed.spell.words = vec!["aaa".to_string()];
+        ed.lsp.hover = Some("h".into());
+        ed.lsp.completion = Some(crate::lsp::CompletionState {
+            items: Vec::new(),
+            selected: 0,
+            line: 0,
+            col: 0,
+            seq: 0,
+            prefix: String::new(),
+        });
+        ed.buffers.push(Buffer::empty());
+        ed.close_buffer(None, true);
+        assert_eq!(ed.buffers.len(), 1);
+        assert!(ed.spell.words.is_empty());
+        assert!(ed.lsp.hover.is_none());
+        assert!(ed.lsp.completion.is_none());
+    }
+
+    #[test]
+    fn open_path_replacing_scratch_buffer_clears_state() {
+        let dir = std::env::temp_dir().join(format!("deditor_open_reset_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("a.txt");
+        std::fs::write(&f, "hello\n").unwrap();
+        let mut ed = Editor::new(None);
+        ed.spell.words = vec!["hello".to_string()];
+        ed.lsp.hover = Some("h".into());
+        ed.open_path(f.clone());
+        assert!(ed.buf().path.as_ref().is_some_and(|p| p == &f));
+        assert!(ed.spell.words.is_empty());
+        assert!(ed.lsp.hover.is_none());
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
