@@ -174,7 +174,7 @@ impl Buffer {
     }
 
     pub fn pos_of(&self, offset: usize) -> Pos {
-        let line = self.rope.char_to_line(offset.min(self.rope.len_chars().saturating_sub(1)));
+        let line = self.rope.char_to_line(offset.min(self.rope.len_chars()));
         Pos {
             line,
             col: offset - self.rope.line_to_char(line),
@@ -468,6 +468,18 @@ mod tests {
         b.redo_action();
         assert_eq!(b.rope.to_string(), "baz bar baz\n");
         assert!(b.dirty);
+    }
+
+    #[test]
+    fn pos_of_resolves_the_offset_just_past_a_line_break() {
+        let mut b = Buffer::empty();
+        b.insert_text("abc\n", false);
+        assert_eq!(b.pos_of(4), Pos { line: 1, col: 0 });
+        b.insert_text("\n", false);
+        assert_eq!(b.pos_of(5), Pos { line: 2, col: 0 });
+        let mut plain = Buffer::empty();
+        plain.insert_text("abc", false);
+        assert_eq!(plain.pos_of(3), Pos { line: 0, col: 3 });
     }
 
 }

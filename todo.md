@@ -1,5 +1,4 @@
 # TODO
-- o on the last line doesn't move the cursor, only creates the new line.
 - dd on the last blank line doesn't delete the line.
 - Wayland - please use the appropriate Wayland protocols for interacting with the Wayland clipboard (wl_data_device from the core Wayland protocol, the primary_selection protocol for the primary selection), for example via the smithay-clipboard crate.
 - Press a button to make a context menu pop-up on a word. E.g. it shows which keys you can use like gd for go to definition etc. Context aware.

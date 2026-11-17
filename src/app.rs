@@ -1959,4 +1959,14 @@ mod tests {
         ed.scroll_to_cursor(10);
         assert_eq!((ed.buf().view_top, ed.buf().view_sub), before);
     }
+    #[test]
+    fn open_below_on_the_last_line_moves_cursor_to_the_new_line() {
+        let mut ed = ed_with("abc\n");
+        ed.buf_mut().cursor = Pos { line: 1, col: 0 };
+        ed.new_line_below();
+        assert_eq!(ed.buf().rope.to_string(), "abc\n\n");
+        assert_eq!(ed.buf().cursor, Pos { line: 2, col: 0 });
+        assert_eq!(ed.mode, Mode::Insert);
+    }
+
 }
