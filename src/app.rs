@@ -1073,12 +1073,12 @@ impl Editor {
                 self.mode = Mode::Normal;
                 match cmd {
                     Cmd::Write => self.write_active(),
-                    Cmd::WriteQuit(_) => {
+                    Cmd::WriteQuit(bang) => {
                         self.write_active();
                         if self.status_err {
                             return;
                         }
-                        if self.buffers.iter().any(|b| b.dirty) {
+                        if !bang && self.buffers.iter().any(|b| b.dirty) {
                             self.set_status(
                                 "E37: No write since last change (add ! to override)".to_string(),
                                 true,
@@ -2366,6 +2366,23 @@ mod tests {
         assert!(!ed.buf().dirty);
         assert!(!ed.quit);
         assert!(ed.status_err);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn force_write_quit_discards_other_dirty_buffers() {
+        let dir = std::env::temp_dir().join(format!("deditor_wq_force_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("w.txt");
+        std::fs::write(&f, "base\n").unwrap();
+        let mut ed = Editor::new(Some(&f));
+        ed.buffers.push(Buffer::empty());
+        ed.activate(1);
+        ed.buf_mut().insert_text("scratch\n", false);
+        ed.activate(0);
+        ed.cmdline = "wq!".to_string();
+        ed.execute_cmdline();
+        assert!(ed.quit);
         std::fs::remove_dir_all(&dir).ok();
     }
 

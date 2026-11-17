@@ -132,10 +132,10 @@ rectangle segment per line, padding short lines.
 | Command | Action |
 | --- | --- |
 | `:w` | write (save) file |
-| `:q` | quit (fails if buffer is dirty) |
-| `:q!` | quit discarding changes |
-| `:wq` / `:x` | write and quit |
-| `:wq!` | write and quit |
+| `:q` | quit (fails if any buffer is dirty) |
+| `:q!` | quit discarding all changes |
+| `:wq` / `:x` | write and quit (fails if another buffer is dirty) |
+| `:wq!` | write, discard other dirty buffers, quit |
 | `:e {path}` | open file (or create a blank buffer) in a new tab |
 | `:590` | jump to line 590 |
 | `:bn` / `:bnext` | next buffer |
@@ -149,6 +149,9 @@ rectangle segment per line, padding short lines.
 | `:settings` | open the settings panel |
 
 `Esc` or `Ctrl-c` aborts; `Enter` executes. `~` is expanded in paths.
+
+Closing the window with unsaved changes warns first; closing again
+discards them.
 
 Search input (`/`, `?`) works the same way: type a literal pattern, `Enter`
 to jump, `Esc`/`Ctrl-c` to cancel.
