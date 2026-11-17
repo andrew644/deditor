@@ -993,13 +993,12 @@ impl Editor {
         }
         let (found, report) = {
             let b = self.buf();
-            let chars: Vec<char> = b.rope.chars().collect();
             let off = b.offset_of(b.cursor);
             let t: Vec<char> = term.chars().collect();
             let start = if back { off.saturating_sub(1) } else { off + 1 };
             let fold = crate::search::ignore_case(term);
-            let found = crate::search::find_wrap(&chars, &t, start, back, fold);
-            let report = found.map(|at| crate::search::match_report(&chars, &t, at, fold));
+            let found = crate::search::find_wrap(&b.rope, &t, start, back, fold);
+            let report = found.map(|at| crate::search::match_report(&b.rope, &t, at, fold));
             (found, report)
         };
         match (found, report) {
