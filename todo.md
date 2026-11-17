@@ -1,5 +1,4 @@
 # TODO
-- LINE 1, COL 1 should be 1:1
 - F2 Show whitespace characters
 - F3 toggle dark/light mode
 - :e file.txt should open in a new buffer

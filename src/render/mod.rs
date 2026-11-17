@@ -468,7 +468,7 @@ pub fn draw_content(
             crate::mode::CmdKind::Search | crate::mode::CmdKind::SearchBack => "-- SEARCH --",
         },
     };
-    let ruler = format!("LINE {}, COL {}", buf.cursor.line + 1, buf.cursor.col + 1);
+    let ruler = format!("{}:{}", buf.cursor.line + 1, buf.cursor.col + 1);
     let right_x = (l.cols as usize)
         .saturating_sub(ruler.chars().count() + mode_label.chars().count() + 3)
         .max(1);
