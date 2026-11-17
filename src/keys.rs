@@ -89,6 +89,7 @@ fn leak_char(c: char) -> Option<&'static str> {
         'h' => "h",
         'j' => "j",
         'k' => "k",
+        'K' => "K",
         'l' => "l",
         'w' => "w",
         'W' => "W",
@@ -125,6 +126,7 @@ fn leak_char(c: char) -> Option<&'static str> {
         '^' => "^",
         '%' => "%",
         '*' => "*",
+        '#' => "#",
         ';' => ";",
         ',' => ",",
         '>' => ">",
@@ -164,12 +166,13 @@ fn normal_key(ed: &mut Editor, key: &Key, mods: ModifiersState) {
     }
     let k = key_char(key);
     if mods.control_key() {
+        let count = if ed.count == 0 { 1 } else { ed.count };
         match k {
-            Some("u") => ed.run_motion(Motion::HalfPageUp, 1),
-            Some("d") => ed.run_motion(Motion::HalfPageDown, 1),
+            Some("u") => ed.run_motion(Motion::HalfPageUp, count),
+            Some("d") => ed.run_motion(Motion::HalfPageDown, count),
             Some("p") => ed.open_panel(crate::fuzzy::Panel::Files),
             Some("b") => ed.open_panel(crate::fuzzy::Panel::Buffers),
-            Some("f") => ed.run_motion(Motion::PageDown, 1),
+            Some("f") => ed.run_motion(Motion::PageDown, count),
             Some("r") => ed.buf_mut().redo_action(),
             Some("v") => ed.start_visual_block(),
             Some("c") | Some("[") => ed.leave_insert(),
@@ -184,14 +187,23 @@ fn normal_key(ed: &mut Editor, key: &Key, mods: ModifiersState) {
             }
             _ => {}
         }
+        ed.count = 0;
         ed.buf_mut().clamp();
         return;
     }
     if let Some(c) = k
         && let Some(d) = c.chars().next().and_then(|ch| ch.to_digit(10))
+        && !matches!(
+            ed.pending,
+            Pending::F { .. } | Pending::R | Pending::TextObj { .. }
+        )
     {
         if ed.count == 0 && d == 0 {
-            ed.run_motion(Motion::Zero, 1);
+            if let Pending::Op(op) = ed.pending {
+                ed.operator_motion(op, Motion::Zero, 1);
+            } else {
+                ed.run_motion(Motion::Zero, 1);
+            }
         } else {
             ed.count = ed.count.saturating_mul(10).saturating_add(d);
         }
@@ -265,7 +277,19 @@ fn normal_key(ed: &mut Editor, key: &Key, mods: ModifiersState) {
         Pending::R => {
             ed.pending = Pending::None;
             if let Some(s) = key_text(key) {
-                ed.replace_char(s);
+                for i in 0..count {
+                    ed.replace_char(s);
+                    if i + 1 < count {
+                        let c = ed.buf().cursor;
+                        if c.col >= line_chars(&ed.buf().rope, c.line) {
+                            break;
+                        }
+                        ed.buf_mut().cursor = Pos {
+                            line: c.line,
+                            col: c.col + 1,
+                        };
+                    }
+                }
             }
             ed.count = 0;
             return;
@@ -276,7 +300,7 @@ fn normal_key(ed: &mut Editor, key: &Key, mods: ModifiersState) {
                 if ed.mode == Mode::Visual {
                     ed.select_object(inner, obj);
                 } else {
-                    ed.operator_object(op, inner, obj);
+                    ed.operator_object(op, inner, obj, count);
                 }
             }
             ed.count = 0;
@@ -405,10 +429,18 @@ fn normal_key(ed: &mut Editor, key: &Key, mods: ModifiersState) {
         "d" | "c" | "y" => ed.pending = Pending::Op(op_of(k)),
         ">" => ed.pending = Pending::Op(Operator::Indent),
         "<" => ed.pending = Pending::Op(Operator::Outdent),
-        "x" => ed.change_char(Operator::Delete),
-        "s" => ed.change_char(Operator::Change),
-        "p" => ed.paste(true),
-        "P" => ed.paste(false),
+        "x" => ed.operator_motion(Operator::Delete, Motion::L, count),
+        "s" => ed.operator_motion(Operator::Change, Motion::L, count),
+        "p" => {
+            for _ in 0..count {
+                ed.paste(true);
+            }
+        }
+        "P" => {
+            for _ in 0..count {
+                ed.paste(false);
+            }
+        }
         "r" => ed.pending = Pending::R,
         "J" => ed.join_lines(count),
         "o" => {
@@ -492,23 +524,12 @@ fn visual_key(ed: &mut Editor, k: &str, count: u32) {
                 inner: false,
             }
         }
-        "d" | "c" | "y" => {
+        "d" | "c" | "x" | "y" => {
             if ed.visual_block {
                 ed.block_apply(op_of(k));
             } else {
                 let ((a, b), lw) = ed.sel_range();
                 ed.op_apply(op_of(k), (a, b), lw);
-                ed.mode = Mode::Normal;
-                ed.visual_anchor = None;
-            }
-        }
-        "x" => {
-            if ed.visual_block {
-                ed.block_apply(Operator::Delete);
-            } else {
-                let ((a, b), lw) = ed.sel_range();
-                ed.op_apply(Operator::Delete, (a, b), lw);
-                ed.mode = Mode::Normal;
                 ed.visual_anchor = None;
             }
         }
@@ -628,7 +649,7 @@ fn motion_of(k: &str) -> Option<Motion> {
 
 fn op_of(k: &str) -> Operator {
     match k {
-        "d" => Operator::Delete,
+        "d" | "x" => Operator::Delete,
         "c" => Operator::Change,
         _ => Operator::Yank,
     }
@@ -650,7 +671,9 @@ fn obj_of(k: &str) -> Option<Obj> {
         'w' => Obj::Word,
         'W' => Obj::BigWord,
         '"' | '\'' | '`' => Obj::Quote(c),
-        '(' | '[' | '{' => Obj::Bracket(c),
+        '(' | ')' => Obj::Bracket('('),
+        '[' | ']' => Obj::Bracket('['),
+        '{' | '}' => Obj::Bracket('{'),
         _ => return None,
     })
 }
@@ -1258,7 +1281,7 @@ mod tests {
     }
 
     #[test]
-    fn block_change_deletes_and_enters_insert_keeping_the_register() {
+    fn block_change_yanks_the_block_and_enters_insert() {
         let mut ed = Editor::new(None);
         ed.config.clipboard = false;
         ed.buf_mut().insert_text("alpha\nbeta\n", false);
@@ -1272,7 +1295,7 @@ mod tests {
         ed.buf_mut().cursor = Pos { line: 1, col: 1 };
         type_keys(&mut ed, &[Key::Character("c".into())]);
         assert_eq!(ed.buf().rope.to_string(), "apha\nbta\n");
-        assert_eq!(ed.register, "keep");
+        assert_eq!(ed.register, "l\ne");
         assert_eq!(ed.mode, Mode::Insert);
     }
 
@@ -1401,5 +1424,141 @@ mod tests {
             &[Key::Character("<".into()), Key::Character("<".into())],
         );
         assert_eq!(ed.buf().rope.to_string(), "hello\n");
+    }
+
+    #[test]
+    fn hash_key_searches_word_backward() {
+        let mut ed = Editor::new(None);
+        ed.config.clipboard = false;
+        ed.buf_mut().insert_text("bar x bar", false);
+        ed.buf_mut().cursor = Pos { line: 0, col: 6 };
+        type_keys(&mut ed, &[Key::Character("#".into())]);
+        assert_eq!(ed.buf().cursor.col, 0);
+    }
+
+    #[test]
+    fn d_zero_deletes_to_line_start() {
+        let mut ed = Editor::new(None);
+        ed.config.clipboard = false;
+        ed.buf_mut().insert_text("hello\n", false);
+        ed.buf_mut().cursor = Pos { line: 0, col: 2 };
+        type_keys(
+            &mut ed,
+            &[Key::Character("d".into()), Key::Character("0".into())],
+        );
+        assert_eq!(ed.buf().rope.to_string(), "llo\n");
+        assert_eq!(ed.pending, Pending::None);
+    }
+
+    #[test]
+    fn digits_work_as_find_and_replace_targets() {
+        let mut ed = Editor::new(None);
+        ed.config.clipboard = false;
+        ed.buf_mut().insert_text("a1b2\n", false);
+        ed.buf_mut().cursor = Pos { line: 0, col: 0 };
+        type_keys(
+            &mut ed,
+            &[Key::Character("f".into()), Key::Character("1".into())],
+        );
+        assert_eq!(ed.buf().cursor.col, 1);
+        type_keys(
+            &mut ed,
+            &[Key::Character("r".into()), Key::Character("7".into())],
+        );
+        assert_eq!(ed.buf().rope.to_string(), "a7b2\n");
+    }
+
+    #[test]
+    fn count_repeats_paste() {
+        let mut ed = Editor::new(None);
+        ed.config.clipboard = false;
+        ed.buf_mut().insert_text("abcd\n", false);
+        ed.buf_mut().cursor = Pos { line: 0, col: 0 };
+        ed.register = "x".into();
+        type_keys(
+            &mut ed,
+            &[Key::Character("3".into()), Key::Character("p".into())],
+        );
+        assert_eq!(ed.buf().rope.to_string(), "axxxbcd\n");
+    }
+
+    #[test]
+    fn count_replaces_several_chars() {
+        let mut ed = Editor::new(None);
+        ed.config.clipboard = false;
+        ed.buf_mut().insert_text("abcd\n", false);
+        ed.buf_mut().cursor = Pos { line: 0, col: 0 };
+        type_keys(
+            &mut ed,
+            &[
+                Key::Character("3".into()),
+                Key::Character("r".into()),
+                Key::Character("!".into()),
+            ],
+        );
+        assert_eq!(ed.buf().rope.to_string(), "!!!d\n");
+        assert_eq!(ed.buf().cursor.col, 2);
+    }
+
+    #[test]
+    fn count_deletes_several_chars() {
+        let mut ed = Editor::new(None);
+        ed.config.clipboard = false;
+        ed.buf_mut().insert_text("abcd\n", false);
+        ed.buf_mut().cursor = Pos { line: 0, col: 0 };
+        type_keys(
+            &mut ed,
+            &[Key::Character("2".into()), Key::Character("x".into())],
+        );
+        assert_eq!(ed.buf().rope.to_string(), "cd\n");
+    }
+
+    #[test]
+    fn closing_bracket_text_objects_work() {
+        let mut ed = Editor::new(None);
+        ed.config.clipboard = false;
+        ed.buf_mut().insert_text("(abc)\n", false);
+        ed.buf_mut().cursor = Pos { line: 0, col: 2 };
+        type_keys(
+            &mut ed,
+            &[
+                Key::Character("d".into()),
+                Key::Character("i".into()),
+                Key::Character(")".into()),
+            ],
+        );
+        assert_eq!(ed.buf().rope.to_string(), "()\n");
+    }
+
+    #[test]
+    fn visual_change_enters_insert_mode() {
+        let mut ed = Editor::new(None);
+        ed.config.clipboard = false;
+        ed.buf_mut().insert_text("hello\n", false);
+        ed.buf_mut().cursor = Pos { line: 0, col: 0 };
+        type_keys(
+            &mut ed,
+            &[
+                Key::Character("v".into()),
+                Key::Character("l".into()),
+                Key::Character("c".into()),
+            ],
+        );
+        assert_eq!(ed.mode, Mode::Insert);
+        assert_eq!(ed.visual_anchor, None);
+    }
+
+    #[test]
+    fn esc_from_cmdline_clears_count() {
+        let mut ed = Editor::new(None);
+        ed.config.clipboard = false;
+        ed.buf_mut().insert_text("one two three\n", false);
+        ed.buf_mut().cursor = Pos { line: 0, col: 0 };
+        type_keys(&mut ed, &[Key::Character("5".into())]);
+        type_keys(&mut ed, &[Key::Character(":".into())]);
+        type_keys(&mut ed, &[Key::Named(NamedKey::Escape)]);
+        assert_eq!(ed.count, 0);
+        type_keys(&mut ed, &[Key::Character("w".into())]);
+        assert_eq!(ed.buf().cursor.col, 4);
     }
 }

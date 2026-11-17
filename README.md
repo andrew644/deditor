@@ -27,7 +27,7 @@ A numeric prefix (`count`) works with motions and most edits, e.g. `3w`, `5x`, `
 | `gj` `gk` | visual down / up (respects soft wrap) |
 | `ge` `gE` | previous word end / WORD end |
 | `%` | matching bracket |
-| `PageUp` `PageDown` | half screen up / down |
+| `PageUp` `PageDown` | full page up / down |
 | `Ctrl-u` `Ctrl-d` | half page up / down |
 | `Ctrl-f` | page down |
 | `zz` | center cursor line in the viewport |

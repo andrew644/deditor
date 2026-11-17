@@ -134,7 +134,7 @@ impl Editor {
             lsp: crate::lsp::LspManager::new(),
             context_menu: None,
             spell: crate::spell::Spell::new(),
-            spell_sig: 0,
+            spell_sig: u64::MAX,
             spell_last: None,
         };
         if let Some(p) = path {
@@ -364,10 +364,8 @@ impl Editor {
             yanked.push(format!("{:<w$}", seg, w = width));
         }
         let block = yanked.join("\n");
-        if op != Op::Change {
-            self.set_register(block.clone(), false);
-            self.reg_block = true;
-        }
+        self.set_register(block, false);
+        self.reg_block = true;
         if op != Op::Yank {
             let mut edits: Vec<(Pos, String, String)> = Vec::new();
             for line in r0..=r1 {
@@ -621,33 +619,31 @@ impl Editor {
             };
             self.buf_mut().cursor = at;
             self.buf_mut().insert_text(&reg, false);
-            let n = reg.chars().count();
-            self.buf_mut().cursor = Pos {
-                line: at.line,
-                col: at.col + n - 1,
-            };
+            let mut end_pos = at;
+            let mut it = reg.chars().peekable();
+            while let Some(ch) = it.next() {
+                if it.peek().is_none() {
+                    break;
+                }
+                if ch == '\n' {
+                    end_pos.line += 1;
+                    end_pos.col = 0;
+                } else {
+                    end_pos.col += 1;
+                }
+            }
+            self.buf_mut().cursor = end_pos;
         }
         self.buf_mut().clamp();
         self.clear_pending();
     }
 
     pub fn replace_char(&mut self, ch: char) {
-        let len = line_chars(&self.buf().rope, self.buf().cursor.line);
         let c = self.buf().cursor;
+        let len = line_chars(&self.buf().rope, c.line);
         if c.col < len {
-            let b = self.buf_mut();
-            let off = b.offset_of(c);
-            b.rope.remove(off..off + 1);
-            b.rope.insert(off, &ch.to_string());
-            b.after_edit();
-            b.undo.push(crate::buffer::UndoEntry {
-                change: crate::buffer::Change::Delete {
-                    at: c,
-                    text: ch.to_string(),
-                },
-                cursor_before: c,
-                cursor_after: c,
-            });
+            let old = self.buf().rope.line(c.line).char(c.col).to_string();
+            self.buf_mut().replace_all(vec![(c, old, ch.to_string())]);
         }
         self.clear_pending();
     }
@@ -878,12 +874,16 @@ impl Editor {
         op: mode::Operator,
         inner: bool,
         obj: crate::textobjects::Obj,
+        count: u32,
     ) {
-        let range = {
-            let b = self.buf();
-            crate::textobjects::object(&b.rope, b.cursor, inner, obj)
-        };
-        if let Some((a, bnd)) = range {
+        for _ in 0..count.max(1) {
+            let range = {
+                let b = self.buf();
+                crate::textobjects::object(&b.rope, b.cursor, inner, obj)
+            };
+            let Some((a, bnd)) = range else {
+                break;
+            };
             self.op_apply(op, (a, bnd), false);
         }
         self.clear_pending();
@@ -905,19 +905,6 @@ impl Editor {
         }
     }
 
-    pub fn change_char(&mut self, op: mode::Operator) {
-        let c = self.buf().cursor;
-        let len = line_chars(&self.buf().rope, c.line);
-        if c.col < len {
-            let bnd = Pos {
-                line: c.line,
-                col: c.col + 1,
-            };
-            self.op_apply(op, (c, bnd), false);
-        }
-        self.clear_pending();
-    }
-
     pub fn open_cmdline(&mut self, kind: mode::CmdKind) {
         self.cmd_kind = Some(kind);
         self.mode = Mode::Command(kind);
@@ -928,6 +915,7 @@ impl Editor {
         self.cmd_kind = None;
         self.cmdline.clear();
         self.mode = Mode::Normal;
+        self.clear_pending();
     }
 
     pub fn search_step(&mut self, term: &str, back: bool) {
@@ -1101,6 +1089,12 @@ impl Editor {
                                     )
                                 })
                                 .collect();
+                            if edits.iter().any(|(_, old, _)| old.is_empty()) {
+                                return Err(
+                                    "E909: pattern must not match the empty string".to_string()
+                                );
+                            }
+
                             if edits.is_empty() {
                                 return Err(format!("E486: Pattern not found: {pat}"));
                             }
@@ -1291,7 +1285,7 @@ impl Editor {
             self.lsp.hover = None;
             self.lsp.completion = None;
             self.spell.clear();
-            self.spell_sig = 0;
+            self.spell_sig = u64::MAX;
             self.spell_last = None;
         }
         self.active = i;
@@ -1319,7 +1313,12 @@ impl Editor {
         if self.buffers.is_empty() {
             self.buffers.push(Buffer::empty());
         }
-        self.active = self.active.min(self.buffers.len() - 1);
+        let next = if i < self.active {
+            self.active - 1
+        } else {
+            self.active.min(self.buffers.len() - 1)
+        };
+        self.activate(next);
         self.lsp.hover = None;
         self.lsp.completion = None;
         self.ensure_lsp();
@@ -1380,7 +1379,7 @@ impl Editor {
     pub fn toggle_spell(&mut self) {
         self.config.spellcheck = !self.config.spellcheck;
         if self.config.spellcheck {
-            self.spell_sig = 0;
+            self.spell_sig = u64::MAX;
             self.spell_last = None;
         } else {
             self.spell.clear();
@@ -1508,7 +1507,7 @@ impl Editor {
                 crate::config::setting_activate(&mut self.config, &key);
                 if key == "spellcheck" {
                     self.spell.clear();
-                    self.spell_sig = 0;
+                    self.spell_sig = u64::MAX;
                     self.spell_last = None;
                 }
                 let (theme, warns) = RgbTheme::from_theme_checked(&self.config.theme);
@@ -1662,7 +1661,7 @@ mod tests {
     fn change_inner_word_enters_insert_and_undoes() {
         let mut ed = ed_with("foo bar baz");
         ed.buf_mut().cursor = Pos { line: 0, col: 4 };
-        ed.operator_object(mode::Operator::Change, true, Obj::Word);
+        ed.operator_object(mode::Operator::Change, true, Obj::Word, 1);
         assert_eq!(text(&ed), "foo  baz");
         assert_eq!(ed.mode, Mode::Insert);
         assert_eq!(ed.buf().cursor, Pos { line: 0, col: 4 });
@@ -1737,7 +1736,7 @@ mod tests {
         let mut ed = ed_with("ab\n");
         ed.config.clipboard = false;
         ed.buf_mut().cursor = Pos { line: 0, col: 0 };
-        ed.change_char(mode::Operator::Delete);
+        ed.operator_motion(mode::Operator::Delete, crate::motions::Motion::L, 1);
         assert_eq!(text(&ed), "b\n");
         assert_eq!(ed.register, "a");
         assert!(!ed.reg_linewise);
@@ -2523,5 +2522,52 @@ mod tests {
         assert_eq!(ed.register, "aa\nbb\ncc");
         ed.buf_mut().undo();
         assert_eq!(text(&ed), "aaaa\nbbbb\ncccc\n");
+    }
+
+    #[test]
+    fn replace_char_undo_restores_original_char() {
+        let mut ed = ed_with("abc");
+        ed.buf_mut().cursor = Pos { line: 0, col: 0 };
+        ed.replace_char('x');
+        assert_eq!(text(&ed), "xbc");
+        ed.buf_mut().undo();
+        assert_eq!(text(&ed), "abc");
+        ed.buf_mut().redo_action();
+        assert_eq!(text(&ed), "xbc");
+    }
+
+    #[test]
+    fn close_buffer_shifts_active_left() {
+        let mut ed = Editor::new(None);
+        ed.buffers.push(Buffer::empty());
+        ed.buffers.push(Buffer::empty());
+        ed.activate(1);
+        ed.close_buffer(Some(1), true);
+        assert_eq!(ed.active, 0);
+        assert_eq!(ed.buffers.len(), 2);
+        ed.close_buffer(Some(2), true);
+        assert_eq!(ed.active, 0);
+        assert_eq!(ed.buffers.len(), 1);
+    }
+
+    #[test]
+    fn replace_command_rejects_zero_width_matches() {
+        let mut ed = ed_with("foo bar\n");
+        ed.cmdline = "r \\b/X".to_string();
+        ed.execute_cmdline();
+        assert!(ed.status_err);
+        assert_eq!(text(&ed), "foo bar\n");
+    }
+
+    #[test]
+    fn charwise_paste_with_newline_lands_on_last_char() {
+        let mut ed = ed_with("ab");
+        ed.config.clipboard = false;
+        ed.register = "x\ny".into();
+        ed.reg_linewise = false;
+        ed.buf_mut().cursor = Pos { line: 0, col: 0 };
+        ed.paste(true);
+        assert_eq!(text(&ed), "ax\nyb");
+        assert_eq!(ed.buf().cursor, Pos { line: 1, col: 0 });
     }
 }
