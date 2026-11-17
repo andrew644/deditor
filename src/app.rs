@@ -948,7 +948,7 @@ impl Editor {
         self.search_step(&term, back);
     }
 
-    pub fn search_cur_word(&mut self) {
+    pub fn search_cur_word(&mut self, back: bool) {
         let term = {
             let b = self.buf();
             let text: Vec<char> = crate::buffer::line_text(&b.rope, b.cursor.line)
@@ -974,8 +974,8 @@ impl Editor {
             }
         };
         self.search = Some(term.clone());
-        self.search_back = false;
-        self.search_step(&term, false);
+        self.search_back = back;
+        self.search_step(&term, back);
     }
 
     pub fn repeat_search(&mut self, reverse: bool) {
@@ -1976,7 +1976,7 @@ mod tests {
     fn star_searches_the_word_under_the_cursor() {
         let mut ed = ed_with("alpha beta alpha\nbeta\n");
         ed.buf_mut().cursor = Pos { line: 0, col: 0 };
-        ed.search_cur_word();
+        ed.search_cur_word(false);
         assert_eq!(ed.buf().cursor, Pos { line: 0, col: 11 });
         assert_eq!(ed.search.as_deref(), Some("alpha"));
         assert!(!ed.status_err);
@@ -1985,10 +1985,19 @@ mod tests {
     }
 
     #[test]
+    fn hash_finds_word_under_cursor_backward() {
+        let mut ed = ed_with("foo bar foo\n");
+        ed.buf_mut().cursor = Pos { line: 0, col: 8 };
+        ed.search_cur_word(true);
+        assert_eq!(ed.buf().cursor, Pos { line: 0, col: 0 });
+        assert_eq!(ed.status.as_deref(), Some("[1/2]"));
+    }
+
+    #[test]
     fn star_on_punctuation_searches_that_char() {
         let mut ed = ed_with("foo.bar.baz");
         ed.buf_mut().cursor = Pos { line: 0, col: 3 };
-        ed.search_cur_word();
+        ed.search_cur_word(false);
         assert_eq!(ed.buf().cursor, Pos { line: 0, col: 7 });
         assert_eq!(ed.search.as_deref(), Some("."));
     }
@@ -1997,7 +2006,7 @@ mod tests {
     fn star_on_whitespace_is_a_no_op() {
         let mut ed = ed_with("a b");
         ed.buf_mut().cursor = Pos { line: 0, col: 1 };
-        ed.search_cur_word();
+        ed.search_cur_word(false);
         assert_eq!(ed.buf().cursor, Pos { line: 0, col: 1 });
         assert_eq!(ed.search, None);
     }

@@ -221,6 +221,14 @@ fn normal_key(ed: &mut Editor, key: &Key, mods: ModifiersState) {
             ed.count = 0;
             return;
         }
+        Pending::OpG { op } => {
+            ed.pending = Pending::None;
+            if matches!(k, Some("g")) {
+                ed.operator_motion(op, Motion::GG, count);
+            }
+            ed.count = 0;
+            return;
+        }
         Pending::Z => {
             ed.pending = Pending::None;
             if matches!(k, Some("z")) {
@@ -277,6 +285,13 @@ fn normal_key(ed: &mut Editor, key: &Key, mods: ModifiersState) {
                 Some("a") => {
                     ed.pending = Pending::TextObj { op, inner: false };
                     return;
+                }
+                Some("g") => {
+                    ed.pending = Pending::OpG { op };
+                    return;
+                }
+                Some("G") => {
+                    ed.operator_motion(op, Motion::G, count);
                 }
                 Some(s2) if s2 == op_char(op) => {
                     ed.operator_line(op);
@@ -350,7 +365,11 @@ fn normal_key(ed: &mut Editor, key: &Key, mods: ModifiersState) {
             return;
         }
         "*" => {
-            ed.search_cur_word();
+            ed.search_cur_word(false);
+            return;
+        }
+        "#" => {
+            ed.search_cur_word(true);
             return;
         }
         ":" => {
@@ -1230,5 +1249,60 @@ mod tests {
         type_keys(&mut ed, &[Key::Named(NamedKey::Escape)]);
         assert_eq!(ed.mode, Mode::Normal);
         assert_eq!(ed.visual_anchor, None);
+    }
+
+    #[test]
+    fn operator_capital_g_deletes_to_end_of_file() {
+        let mut ed = Editor::new(None);
+        ed.config.clipboard = false;
+        ed.buf_mut().insert_text("one\ntwo\nthree\n", false);
+        ed.buf_mut().cursor = Pos { line: 1, col: 0 };
+        type_keys(&mut ed, &[Key::Character("d".into()), Key::Character("G".into())]);
+        assert_eq!(ed.buf().rope.to_string(), "one\n");
+        assert_eq!(ed.register, "two\nthree\n");
+    }
+
+    #[test]
+    fn operator_gg_deletes_to_first_line() {
+        let mut ed = Editor::new(None);
+        ed.config.clipboard = false;
+        ed.buf_mut().insert_text("one\ntwo\nthree\n", false);
+        ed.buf_mut().cursor = Pos { line: 1, col: 0 };
+        type_keys(
+            &mut ed,
+            &[
+                Key::Character("y".into()),
+                Key::Character("g".into()),
+                Key::Character("g".into()),
+            ],
+        );
+        assert_eq!(ed.register, "one\ntwo\n");
+        assert_eq!(ed.buf().rope.to_string(), "one\ntwo\nthree\n");
+        type_keys(
+            &mut ed,
+            &[
+                Key::Character("d".into()),
+                Key::Character("g".into()),
+                Key::Character("g".into()),
+            ],
+        );
+        assert_eq!(ed.buf().rope.to_string(), "three\n");
+    }
+
+    #[test]
+    fn operator_g_then_other_key_cancels() {
+        let mut ed = Editor::new(None);
+        ed.config.clipboard = false;
+        ed.buf_mut().insert_text("one\ntwo\n", false);
+        type_keys(
+            &mut ed,
+            &[
+                Key::Character("d".into()),
+                Key::Character("g".into()),
+                Key::Character("x".into()),
+            ],
+        );
+        assert_eq!(ed.pending, Pending::None);
+        assert_eq!(ed.buf().rope.to_string(), "one\ntwo\n");
     }
 }

@@ -39,4 +39,5 @@ pub enum Pending {
     R,
     Z,
     TextObj { op: Operator, inner: bool },
+    OpG { op: Operator },
 }

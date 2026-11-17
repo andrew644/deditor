@@ -824,22 +824,14 @@ fn draw_layer(
 }
 
 fn pending_label(ed: &crate::app::Editor) -> String {
-    use crate::mode::{Operator, Pending};
+    use crate::mode::Pending;
     let mut s = String::new();
     if ed.count > 0 {
         s.push_str(&ed.count.to_string());
     }
     match &ed.pending {
         Pending::None => {}
-        Pending::Op(op) => {
-            s.push_str(match op {
-                Operator::Delete => "d",
-                Operator::Change => "c",
-                Operator::Yank => "y",
-                Operator::Indent => ">",
-                Operator::Outdent => "<",
-            });
-        }
+        Pending::Op(op) => s.push_str(op_letter(op)),
         Pending::G => s.push('g'),
         Pending::Z => s.push('z'),
         Pending::F { forward, to } => {
@@ -852,8 +844,23 @@ fn pending_label(ed: &crate::app::Editor) -> String {
         }
         Pending::R => s.push('r'),
         Pending::TextObj { inner, .. } => s.push(if *inner { 'i' } else { 'a' }),
+        Pending::OpG { op } => {
+            s.push_str(op_letter(op));
+            s.push('g');
+        }
     }
     s
+}
+
+fn op_letter(op: &crate::mode::Operator) -> &'static str {
+    use crate::mode::Operator;
+    match op {
+        Operator::Delete => "d",
+        Operator::Change => "c",
+        Operator::Yank => "y",
+        Operator::Indent => ">",
+        Operator::Outdent => "<",
+    }
 }
 
 fn mkbuf(ts: &mut TextSystem, s: &str, w: f32, h: f32) -> Buffer {
