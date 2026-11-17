@@ -38,12 +38,23 @@ pub struct LspClient {
 
 impl LspClient {
     pub fn spawn(bin: &str, args: &[&str], root: &str) -> Result<Self, String> {
-        let mut child = Command::new(bin)
-            .args(args)
+        let mut cmd = Command::new(bin);
+        cmd.args(args)
             .current_dir(root)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::null());
+        #[cfg(unix)]
+        unsafe {
+            use std::os::unix::process::CommandExt;
+            cmd.pre_exec(|| {
+                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let mut child = cmd
             .spawn()
             .map_err(|e| format!("failed to start {bin}: {e}"))?;
         let stdin = child.stdin.take().expect("piped stdin");

@@ -381,6 +381,7 @@ dependencies = [
  "bytemuck",
  "cosmic-text",
  "glyphon",
+ "libc",
  "lsp-types",
  "nucleo-matcher",
  "regex",
