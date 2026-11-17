@@ -14,6 +14,9 @@ pub fn on_key(ed: &mut Editor, ev: &KeyEvent, mods: ModifiersState) {
 }
 
 fn key_down(ed: &mut Editor, key: &Key, mods: ModifiersState) {
+    if is_modifier(key) {
+        return;
+    }
     if ed.panel != crate::fuzzy::Panel::None {
         panel_key(ed, key, mods);
         return;
@@ -23,6 +26,22 @@ fn key_down(ed: &mut Editor, key: &Key, mods: ModifiersState) {
         Mode::Command(_) => command_key(ed, key, mods),
         Mode::Normal | Mode::Visual => normal_key(ed, key, mods),
     }
+}
+
+fn is_modifier(key: &Key) -> bool {
+    matches!(
+        key,
+        Key::Dead(_)
+            | Key::Named(
+                NamedKey::Shift
+                    | NamedKey::Control
+                    | NamedKey::Alt
+                    | NamedKey::AltGraph
+                    | NamedKey::Super
+                    | NamedKey::CapsLock
+                    | NamedKey::ModeChange
+            )
+    )
 }
 
 fn key_char(key: &Key) -> Option<&'static str> {
@@ -967,5 +986,40 @@ mod tests {
         ed.set_status("E37: No write since last change".to_string(), true);
         type_keys(&mut ed, &[Key::Character("l".into())]);
         assert_eq!(ed.status, None);
+    }
+
+    #[test]
+    fn shift_between_find_and_target_keeps_the_pending_find() {
+        let mut ed = Editor::new(None);
+        ed.buf_mut().insert_text("onePtwo\n", false);
+        ed.buf_mut().cursor = Pos { line: 0, col: 0 };
+        type_keys(
+            &mut ed,
+            &[
+                Key::Character("f".into()),
+                Key::Named(NamedKey::Shift),
+                Key::Character("P".into()),
+            ],
+        );
+        assert_eq!(ed.buf().cursor, Pos { line: 0, col: 3 });
+        assert_eq!(ed.last_find, Some((FindDir::F, 'P')));
+    }
+
+    #[test]
+    fn shift_between_operator_and_motion_still_applies_the_operator() {
+        let mut ed = Editor::new(None);
+        ed.config.clipboard = false;
+        ed.buf_mut().insert_text("one two three\n", false);
+        ed.buf_mut().cursor = Pos { line: 0, col: 0 };
+        type_keys(
+            &mut ed,
+            &[
+                Key::Character("d".into()),
+                Key::Named(NamedKey::Shift),
+                Key::Character("W".into()),
+            ],
+        );
+        assert_eq!(ed.buf().rope.to_string(), "two three\n");
+        assert_eq!(ed.pending, Pending::None);
     }
 }
