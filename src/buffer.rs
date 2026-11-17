@@ -264,8 +264,8 @@ impl Buffer {
             (to, from)
         };
         let cursor_before = self.cursor;
-        let s = self.offset_of(start);
-        let e = self.offset_of(end);
+        let s = self.offset_of(start).min(self.rope.len_chars());
+        let e = self.offset_of(end).min(self.rope.len_chars()).max(s);
         let text = self.rope.slice(s..e).to_string();
         self.rope.remove(s..e);
         self.cursor = start;
@@ -288,7 +288,7 @@ impl Buffer {
         match &e.change {
             Change::Insert { at, text } => {
                 let off = self.offset_of(*at);
-                self.rope.remove(off..off + text.chars().count());
+                cut(&mut self.rope, off, text.chars().count());
             }
             Change::Delete { at, text } => {
                 let off = self.offset_of(*at);
@@ -298,7 +298,7 @@ impl Buffer {
                 let prefixes = replace_prefix_shifts(edits);
                 for ((at, old, new), pre) in edits.iter().zip(&prefixes).rev() {
                     let off = shifted_offset(self, *at, *pre);
-                    self.rope.remove(off..off + new.chars().count());
+                    cut(&mut self.rope, off, new.chars().count());
                     self.rope.insert(off, old);
                 }
             }
@@ -321,12 +321,12 @@ impl Buffer {
             }
             Change::Delete { at, text } => {
                 let off = self.offset_of(*at);
-                self.rope.remove(off..off + text.chars().count());
+                cut(&mut self.rope, off, text.chars().count());
             }
             Change::Replace { edits } => {
                 for (at, old, new) in edits.iter().rev() {
                     let off = self.offset_of(*at);
-                    self.rope.remove(off..off + old.chars().count());
+                    cut(&mut self.rope, off, old.chars().count());
                     self.rope.insert(off, new);
                 }
             }
@@ -341,8 +341,8 @@ impl Buffer {
     pub fn replace_all(&mut self, edits: Vec<(Pos, String, String)>) {
         let cursor_before = self.cursor;
         for (at, old, new) in edits.iter().rev() {
-            let off = self.offset_of(*at);
-            self.rope.remove(off..off + old.chars().count());
+            let off = self.offset_of(*at).min(self.rope.len_chars());
+            cut(&mut self.rope, off, old.chars().count());
             self.rope.insert(off, new);
         }
         self.clamp();
@@ -354,6 +354,11 @@ impl Buffer {
             cursor_after,
         });
     }
+}
+
+fn cut(rope: &mut Rope, off: usize, count: usize) {
+    let off = off.min(rope.len_chars());
+    rope.remove(off..(off + count).min(rope.len_chars()));
 }
 
 fn replace_prefix_shifts(edits: &[(Pos, String, String)]) -> Vec<i64> {
@@ -549,5 +554,91 @@ mod tests {
         b.cursor = Pos { line: 0, col: 0 };
         b.insert_text("z", true);
         assert_eq!(b.rope.to_string(), "z");
+    }
+
+    struct Rng(u64);
+
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            let mut x = self.0;
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            self.0 = x;
+            x
+        }
+        fn below(&mut self, n: usize) -> usize {
+            (self.next() % n as u64) as usize
+        }
+    }
+
+    #[test]
+    fn fuzz_buffer_ops_keep_cursor_in_bounds() {
+        for seed in 1..=30u64 {
+            let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+            let mut b = Buffer::empty();
+            for step in 0..400 {
+                let l = rng.below(b.rope.len_lines());
+                let col = rng.below(b.rope.line(l).len_chars() + 1);
+                b.cursor = Pos { line: l, col };
+                match rng.below(6) {
+                    0 => b.insert_text("ab\u{e9}cd\n", false),
+                    1 => b.insert_text("x", true),
+                    2 => {
+                        let l2 = rng.below(b.rope.len_lines());
+                        let c2 = rng.below(b.rope.line(l2).len_chars() + 1);
+                        b.delete_text(Pos { line: l, col }, Pos { line: l2, col: c2 });
+                    }
+                    3 => b.undo(),
+                    4 => b.redo_action(),
+                    _ => b.replace_all(vec![(
+                        Pos { line: l, col },
+                        "ab".to_string(),
+                        "q\u{fc}z".to_string(),
+                    )]),
+                }
+                b.clamp();
+                assert!(
+                    b.cursor.line < b.rope.len_lines(),
+                    "seed {seed} step {step} line out of range"
+                );
+                assert!(
+                    b.cursor.col <= b.rope.line(b.cursor.line).len_chars(),
+                    "seed {seed} step {step} col out of range"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn fuzz_undo_restores_every_previous_snapshot() {
+        for seed in 1..=30u64 {
+            let mut rng = Rng(seed.wrapping_mul(0xDEAD_BEEF) | 1);
+            let mut b = Buffer::empty();
+            b.insert_text("hello world\nsecond\n", false);
+            let mut snapshots = vec![b.rope.to_string()];
+            for step in 0..150 {
+                let l = rng.below(b.rope.len_lines());
+                let col = rng.below(b.rope.line(l).len_chars() + 1);
+                b.cursor = Pos { line: l, col };
+                match rng.below(3) {
+                    0 => b.insert_text("z\n", false),
+                    1 => b.insert_text("q", false),
+                    _ => {
+                        let l2 = rng.below(b.rope.len_lines());
+                        let c2 = rng.below(b.rope.line(l2).len_chars() + 1);
+                        b.delete_text(Pos { line: l, col }, Pos { line: l2, col: c2 });
+                    }
+                }
+                snapshots.push(b.rope.to_string());
+                b.undo();
+                snapshots.pop();
+                assert_eq!(
+                    b.rope.to_string(),
+                    *snapshots.last().unwrap(),
+                    "undo mismatch seed {seed} step {step}"
+                );
+            }
+        }
     }
 }
