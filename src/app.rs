@@ -49,6 +49,7 @@ pub enum Cmd {
     Settings,
     Goto(usize),
     Pwd(Option<String>),
+    Replace(String, String),
 }
 
 pub fn parse_cmd(s: &str) -> Result<Cmd, String> {
@@ -73,6 +74,12 @@ pub fn parse_cmd(s: &str) -> Result<Cmd, String> {
         (_, "") if !head.is_empty() && head.bytes().all(|b| b.is_ascii_digit()) => {
             Ok(Cmd::Goto(head.parse().unwrap_or(usize::MAX)))
         }
+        ("r", a) => match a.split_once('/') {
+            Some((pat, repl)) if !pat.is_empty() => {
+                Ok(Cmd::Replace(pat.to_string(), repl.to_string()))
+            }
+            _ => Err(format!("E116: Invalid arguments to :r: {s}")),
+        },
         _ => Err(format!("E492: Not an editor command: {s}")),
     }
 }
@@ -945,6 +952,38 @@ impl Editor {
                             }
                         }
                     }
+                    Cmd::Replace(pat, repl) => {
+                        let outcome = (|| -> Result<usize, String> {
+                            let re = regex::Regex::new(&pat)
+                                .map_err(|e| format!("E116: Invalid regex: {e}"))?;
+                            if re.is_match("") {
+                                return Err(
+                                    "E909: pattern must not match the empty string".to_string(),
+                                );
+                            }
+                            let text = self.buf().rope.to_string();
+                            let edits: Vec<(Pos, String, String)> = re
+                                .find_iter(&text)
+                                .map(|m| {
+                                    (
+                                        self.buf().pos_of(m.start()),
+                                        m.as_str().to_string(),
+                                        repl.clone(),
+                                    )
+                                })
+                                .collect();
+                            if edits.is_empty() {
+                                return Err(format!("E486: Pattern not found: {pat}"));
+                            }
+                            let n = edits.len();
+                            self.buf_mut().replace_all(edits);
+                            Ok(n)
+                        })();
+                        match outcome {
+                            Ok(n) => self.set_status(format!("{n} substitutions"), false),
+                            Err(e) => self.set_status(e, true),
+                        }
+                    }
                 }
             }
         }
@@ -1468,6 +1507,18 @@ mod tests {
             parse_cmd("pwd /tmp"),
             Ok(Cmd::Pwd(Some("/tmp".to_string())))
         );
+        assert_eq!(
+            parse_cmd("r foo/bar"),
+            Ok(Cmd::Replace("foo".to_string(), "bar".to_string()))
+        );
+        assert_eq!(
+            parse_cmd("r foo"),
+            Err("E116: Invalid arguments to :r: r foo".to_string())
+        );
+        assert_eq!(
+            parse_cmd("r /x"),
+            Err("E116: Invalid arguments to :r: r /x".to_string())
+        );
     }
 
     #[test]
@@ -1545,6 +1596,31 @@ mod tests {
             assert_eq!(files_root("~/src/"), files_root("~/").join("src").join(""));
         }
         assert_eq!(files_root(""), std::env::current_dir().unwrap());
+    }
+
+    #[test]
+    fn replace_command_rewrites_every_match() {
+        let mut ed = ed_with("foo one foo two\nfoo\n");
+        ed.cmdline = "r foo/baz".to_string();
+        ed.execute_cmdline();
+        assert_eq!(text(&ed), "baz one baz two\nbaz\n");
+        assert_eq!(ed.status.as_deref(), Some("3 substitutions"));
+        assert!(!ed.status_err);
+        ed.buf_mut().undo();
+        assert_eq!(text(&ed), "foo one foo two\nfoo\n");
+        ed.cmdline = "r \\bfoo\\b/bar".to_string();
+        ed.execute_cmdline();
+        assert_eq!(text(&ed), "bar one bar two\nbar\n");
+        ed.cmdline = "r zzz/y".to_string();
+        ed.execute_cmdline();
+        assert!(ed.status_err);
+        assert_eq!(text(&ed), "bar one bar two\nbar\n");
+        ed.cmdline = "r (bad/x".to_string();
+        ed.execute_cmdline();
+        assert!(ed.status_err);
+        ed.cmdline = "r a*/x".to_string();
+        ed.execute_cmdline();
+        assert!(ed.status_err);
     }
 
     #[test]

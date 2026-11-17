@@ -1,5 +1,4 @@
 # TODO
-- Add find and replace command. Like this :r regex/replace_string to change every instance in the file.
 - o on the last line doesn't move the cursor, only creates the new line.
 - dd on the last blank line doesn't delete the line.
 - Wayland - please use the appropriate Wayland protocols for interacting with the Wayland clipboard (wl_data_device from the core Wayland protocol, the primary_selection protocol for the primary selection), for example via the smithay-clipboard crate.

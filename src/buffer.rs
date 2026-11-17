@@ -11,6 +11,7 @@ pub struct Pos {
 pub enum Change {
     Insert { at: Pos, text: String },
     Delete { at: Pos, text: String },
+    Replace { edits: Vec<(Pos, String, String)> },
 }
 
 pub struct UndoEntry {
@@ -289,6 +290,13 @@ impl Buffer {
                 let off = self.offset_of(*at);
                 self.rope.insert(off, text);
             }
+            Change::Replace { edits } => {
+                for (at, old, new) in edits.iter().rev() {
+                    let off = self.offset_of(*at);
+                    self.rope.remove(off..off + new.chars().count());
+                    self.rope.insert(off, old);
+                }
+            }
         }
         self.cursor = e.cursor_before;
         self.clamp();
@@ -309,11 +317,35 @@ impl Buffer {
                 let off = self.offset_of(*at);
                 self.rope.remove(off..off + text.chars().count());
             }
+            Change::Replace { edits } => {
+                for (at, old, new) in edits {
+                    let off = self.offset_of(*at);
+                    self.rope.remove(off..off + old.chars().count());
+                    self.rope.insert(off, new);
+                }
+            }
         }
         self.cursor = e.cursor_after;
         self.clamp();
         self.refresh_dirty();
         self.undo.push(e);
+    }
+
+    pub fn replace_all(&mut self, edits: Vec<(Pos, String, String)>) {
+        let cursor_before = self.cursor;
+        for (at, old, new) in &edits {
+            let off = self.offset_of(*at);
+            self.rope.remove(off..off + old.chars().count());
+            self.rope.insert(off, new);
+        }
+        self.clamp();
+        let cursor_after = self.cursor;
+        self.after_edit();
+        self.undo.push(UndoEntry {
+            change: Change::Replace { edits },
+            cursor_before,
+            cursor_after,
+        });
     }
 }
 
@@ -415,6 +447,27 @@ mod tests {
         tabs.insert_text("\t\tx\n", false);
         assert_eq!(tabs.dedent_line(0, 4), 1);
         assert_eq!(tabs.rope.to_string(), "\tx\n");
+    }
+
+    #[test]
+    fn replace_all_undoes_and_redoes_as_one_step() {
+        let mut b = Buffer::empty();
+        b.insert_text("foo bar foo\n", false);
+        b.undo.clear();
+        b.mark_saved();
+        b.replace_all(vec![
+            (Pos { line: 0, col: 0 }, "foo".to_string(), "baz".to_string()),
+            (Pos { line: 0, col: 8 }, "foo".to_string(), "baz".to_string()),
+        ]);
+        assert_eq!(b.rope.to_string(), "baz bar baz\n");
+        assert_eq!(b.undo.len(), 1);
+        assert!(b.dirty);
+        b.undo();
+        assert_eq!(b.rope.to_string(), "foo bar foo\n");
+        assert!(!b.dirty);
+        b.redo_action();
+        assert_eq!(b.rope.to_string(), "baz bar baz\n");
+        assert!(b.dirty);
     }
 
 }
