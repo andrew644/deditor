@@ -172,6 +172,7 @@ the home directory.
 
 | Key | Action |
 | --- | --- |
+| `F1` | toggle spellcheck |
 | `F2` | toggle whitespace display |
 | `F3` | toggle dark / light theme |
 
@@ -184,5 +185,7 @@ Config file: `~/.config/deditor/config.yaml`
 (`%LOCALAPPDATA%\deditor\config.yaml` on Windows), override location with
 `DEDITOR_CONFIG=/path/to/file`. See [config.example.yaml](config.example.yaml)
 for every key (font, tab width, line numbers, clipboard sync, whitespace
-display, and a full color theme). `:settings` edits these live and saves on
-change.
+display, spellcheck, and a full color theme). `:settings` edits these live and
+saves on change. Spellcheck (`F1`) underlines words `hunspell` does not know;
+it needs the `hunspell` binary and a dictionary (e.g. `hunspell_en_us`), with
+an optional `spell_dict` path. Without them it stays silent.

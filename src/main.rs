@@ -21,6 +21,7 @@ mod keys;
 mod mode;
 mod render;
 mod search;
+mod spell;
 mod wrap;
 
 use app::Editor;
@@ -431,6 +432,8 @@ impl App {
             .saturating_sub(grid.gutter_cols as usize)
             .max(1);
         ed.poll_lsp();
+        ed.poll_spell();
+        ed.maybe_check_spell(self.proxy.clone());
         ed.scroll_to_cursor(grid.rows as usize);
         let lsp_busy = ed.lsp.busy();
         self.tab_ranges = render::tab_hit_ranges(ed, text.cell_w.max(1.0));

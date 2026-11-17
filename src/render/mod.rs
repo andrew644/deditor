@@ -351,6 +351,26 @@ pub fn draw_content(
             }
         }
     }
+    if !ed.spell.words.is_empty() {
+        for (r, scr) in rows.iter().enumerate() {
+            if scr.line >= buf.rope.len_lines() || scr.start >= scr.end {
+                continue;
+            }
+            let raw = crate::buffer::line_text(&buf.rope, scr.line);
+            for (col, len) in crate::spell::misspelled_spans(&raw, &ed.spell.words) {
+                if col < scr.start || col >= scr.end {
+                    continue;
+                }
+                rects.push(rects::RectInstance {
+                    x: (gutter + wrap.pos(&raw, col).1) as f32 * cw,
+                    y: (1 + r) as f32 * ch + ch - 2.0,
+                    w: len.min(scr.end - col) as f32 * cw,
+                    h: 2.0,
+                    color: theme.error,
+                });
+            }
+        }
+    }
     if ed.mode == crate::mode::Mode::Visual {
         if let Some((r0, r1, c0, c1)) = ed.visual_block.then_some(ed.block_range()).flatten() {
             for (r, scr) in rows.iter().enumerate() {

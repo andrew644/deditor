@@ -111,6 +111,8 @@ pub struct Config {
     pub line_numbers: bool,
     pub clipboard: bool,
     pub show_whitespace: bool,
+    pub spellcheck: bool,
+    pub spell_dict: String,
 }
 
 impl Default for Config {
@@ -122,6 +124,8 @@ impl Default for Config {
             line_numbers: true,
             clipboard: true,
             show_whitespace: false,
+            spellcheck: false,
+            spell_dict: String::new(),
         }
     }
 }
@@ -249,13 +253,14 @@ pub const PALETTE: [&str; 12] = [
     "#f7768e", "#e0af68", "#26262e", "#3f4a5f",
 ];
 
-pub const SETTINGS: [&str; 20] = [
+pub const SETTINGS: [&str; 21] = [
     "font.family",
     "font.size",
     "tab_width",
     "line_numbers",
     "clipboard",
     "show_whitespace",
+    "spellcheck",
     "theme.fg",
     "theme.bg",
     "theme.gutter_fg",
@@ -327,6 +332,7 @@ pub fn setting_value(cfg: &Config, key: &str) -> String {
         "line_numbers" => format!("{}", cfg.line_numbers),
         "clipboard" => format!("{}", cfg.clipboard),
         "show_whitespace" => format!("{}", cfg.show_whitespace),
+        "spellcheck" => format!("{}", cfg.spellcheck),
         k if k.starts_with("theme.") => {
             theme_color(&cfg.theme, &k["theme.".len()..]).unwrap_or("?").to_string()
         }
@@ -345,6 +351,7 @@ pub fn setting_activate(cfg: &mut Config, key: &str) {
         "line_numbers" => cfg.line_numbers = !cfg.line_numbers,
         "clipboard" => cfg.clipboard = !cfg.clipboard,
         "show_whitespace" => cfg.show_whitespace = !cfg.show_whitespace,
+        "spellcheck" => cfg.spellcheck = !cfg.spellcheck,
         k if k.starts_with("theme.") => {
             let name = &k["theme.".len()..];
             let cur = theme_color(&cfg.theme, name).map(|s| s.to_string());
@@ -450,6 +457,18 @@ mod tests {
         setting_activate(&mut c, "show_whitespace");
         assert!(c.show_whitespace);
         assert_eq!(setting_value(&c, "show_whitespace"), "true");
+    }
+
+    #[test]
+    fn spellcheck_round_trips() {
+        let mut c = Config::default();
+        assert!(!c.spellcheck);
+        assert!(c.spell_dict.is_empty());
+        assert_eq!(setting_value(&c, "spellcheck"), "false");
+        assert!(SETTINGS.contains(&"spellcheck"));
+        setting_activate(&mut c, "spellcheck");
+        assert!(c.spellcheck);
+        assert_eq!(setting_value(&c, "spellcheck"), "true");
     }
 
     #[test]

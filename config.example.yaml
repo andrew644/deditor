@@ -10,6 +10,10 @@ tab_width: 4
 line_numbers: true
 clipboard: true
 show_whitespace: false
+spellcheck: false
+# Path (without extension) of a hunspell dictionary, e.g. /usr/share/hunspell/en_US.
+# Empty uses hunspell's default dictionary. Requires the hunspell binary.
+spell_dict: ""
 
 theme:
   fg: "#d8d8da"

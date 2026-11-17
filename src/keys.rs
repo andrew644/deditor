@@ -18,6 +18,10 @@ fn key_down(ed: &mut Editor, key: &Key, mods: ModifiersState) {
         return;
     }
     ed.context_menu = None;
+    if *key == Key::Named(NamedKey::F1) {
+        ed.toggle_spell();
+        return;
+    }
     if *key == Key::Named(NamedKey::F2) {
         ed.config.show_whitespace = !ed.config.show_whitespace;
         ed.set_status(
@@ -1304,5 +1308,17 @@ mod tests {
         );
         assert_eq!(ed.pending, Pending::None);
         assert_eq!(ed.buf().rope.to_string(), "one\ntwo\n");
+    }
+
+    #[test]
+    fn f1_toggles_spellcheck() {
+        let mut ed = Editor::new(None);
+        assert!(!ed.config.spellcheck);
+        type_keys(&mut ed, &[Key::Named(NamedKey::F1)]);
+        assert!(ed.config.spellcheck);
+        assert_eq!(ed.status.as_deref(), Some("spellcheck: on"));
+        type_keys(&mut ed, &[Key::Named(NamedKey::F1)]);
+        assert!(!ed.config.spellcheck);
+        assert_eq!(ed.status.as_deref(), Some("spellcheck: off"));
     }
 }

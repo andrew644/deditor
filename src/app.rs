@@ -38,6 +38,8 @@ pub struct Editor {
     pub panel_cursor: usize,
     pub lsp: crate::lsp::LspManager,
     pub context_menu: Option<String>,
+    pub spell: crate::spell::Spell,
+    spell_sig: u64,
 }
 
 
@@ -131,6 +133,8 @@ impl Editor {
             panel_cursor: 0,
             lsp: crate::lsp::LspManager::new(),
             context_menu: None,
+            spell: crate::spell::Spell::new(),
+            spell_sig: 0,
         };
         if let Some(p) = path {
             match Buffer::load(p) {
@@ -1261,6 +1265,8 @@ impl Editor {
         if i != self.active {
             self.lsp.hover = None;
             self.lsp.completion = None;
+            self.spell.clear();
+            self.spell_sig = 0;
         }
         self.active = i;
     }
@@ -1318,6 +1324,46 @@ impl Editor {
                 }
             }
         }
+    }
+
+    pub fn poll_spell(&mut self) {
+        self.spell.poll();
+    }
+
+    pub fn maybe_check_spell(&mut self, proxy: Option<winit::event_loop::EventLoopProxy<()>>) {
+        if !self.config.spellcheck || self.spell.busy() {
+            return;
+        }
+        let mut h: u64 = 0xcbf29ce484222325;
+        for c in self.buf().rope.chunks() {
+            for b in c.bytes() {
+                h ^= b as u64;
+                h = h.wrapping_mul(0x100000001b3);
+            }
+        }
+        if h == self.spell_sig {
+            return;
+        }
+        self.spell_sig = h;
+        let text = self.buf().rope.to_string();
+        let dict = self.config.spell_dict.clone();
+        self.spell.request(text, dict, proxy);
+    }
+
+    pub fn toggle_spell(&mut self) {
+        self.config.spellcheck = !self.config.spellcheck;
+        if self.config.spellcheck {
+            self.spell_sig = 0;
+        } else {
+            self.spell.clear();
+        }
+        self.set_status(
+            format!(
+                "spellcheck: {}",
+                if self.config.spellcheck { "on" } else { "off" }
+            ),
+            false,
+        );
     }
 
     fn notify_saved(&mut self) {
@@ -1438,6 +1484,10 @@ impl Editor {
             crate::fuzzy::Panel::Settings => {
                 let key = crate::config::SETTINGS[idx].to_string();
                 crate::config::setting_activate(&mut self.config, &key);
+                if key == "spellcheck" {
+                    self.spell.clear();
+                    self.spell_sig = 0;
+                }
                 let (theme, warns) = RgbTheme::from_theme_checked(&self.config.theme);
                 self.theme = theme;
                 let val = crate::config::setting_value(&self.config, &key);
