@@ -727,7 +727,16 @@ impl Editor {
                 col: line_chars(&self.buf().rope, last),
             }
         };
-        self.op_apply(op, (Pos { line, col: 0 }, bnd), true);
+        let a = Pos { line, col: 0 };
+        if bnd == a && line > 0 {
+            let prev = Pos {
+                line: line - 1,
+                col: line_chars(&self.buf().rope, line - 1),
+            };
+            self.op_apply(op, (prev, bnd), true);
+        } else {
+            self.op_apply(op, (a, bnd), true);
+        }
         self.clear_pending();
     }
 
@@ -1360,6 +1369,31 @@ mod tests {
         assert_eq!(text(&ed), "one\nthree\n");
         ed.buf_mut().undo();
         assert_eq!(text(&ed), "one\ntwo\nthree\n");
+    }
+
+    #[test]
+    fn dd_on_the_last_blank_line_removes_the_trailing_break() {
+        let mut ed = ed_with("a\nb\n");
+        ed.config.clipboard = false;
+        ed.buf_mut().cursor = Pos { line: 2, col: 0 };
+        ed.count = 0;
+        ed.operator_line(mode::Operator::Delete);
+        assert_eq!(text(&ed), "a\nb");
+        assert_eq!(ed.buf().cursor, Pos { line: 1, col: 0 });
+        assert_eq!(ed.register, "\n");
+        assert!(ed.reg_linewise);
+        ed.buf_mut().undo();
+        assert_eq!(text(&ed), "a\nb\n");
+    }
+
+    #[test]
+    fn dd_on_a_single_blank_buffer_does_not_panic() {
+        let mut ed = ed_with("");
+        ed.config.clipboard = false;
+        ed.count = 0;
+        ed.operator_line(mode::Operator::Delete);
+        assert_eq!(text(&ed), "");
+        assert_eq!(ed.buf().cursor, Pos { line: 0, col: 0 });
     }
 
     #[test]
