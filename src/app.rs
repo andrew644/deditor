@@ -18,8 +18,10 @@ pub struct Editor {
     pub count: u32,
     pub register: String,
     pub reg_linewise: bool,
+    pub reg_block: bool,
     pub visual_anchor: Option<Pos>,
     pub visual_linewise: bool,
+    pub visual_block: bool,
     pub coalesce_open: bool,
     pub last_find: Option<(mode::FindDir, char)>,
     pub view_rows: usize,
@@ -109,8 +111,10 @@ impl Editor {
             count: 0,
             register: String::new(),
             reg_linewise: false,
+            reg_block: false,
             visual_anchor: None,
             visual_linewise: false,
+            visual_block: false,
             coalesce_open: false,
             last_find: None,
             view_rows: 24,
@@ -297,17 +301,90 @@ impl Editor {
     }
 
     pub fn start_visual(&mut self, linewise: bool) {
-        if self.mode == Mode::Visual
-            && (self.visual_linewise == linewise || !linewise) {
+        if self.mode == Mode::Visual {
+            if self.visual_block {
+                self.visual_block = false;
+                self.visual_linewise = linewise;
+                return;
+            }
+            if self.visual_linewise == linewise || !linewise {
                 self.mode = Mode::Normal;
                 self.visual_anchor = None;
                 return;
             }
+        }
         self.mode = Mode::Visual;
         self.visual_linewise = linewise;
         let c = self.buf().cursor;
         self.visual_anchor = Some(c);
         self.clear_pending();
+    }
+
+    pub fn start_visual_block(&mut self) {
+        if self.mode == Mode::Visual && self.visual_block {
+            self.mode = Mode::Normal;
+            self.visual_anchor = None;
+            self.visual_block = false;
+            return;
+        }
+        self.mode = Mode::Visual;
+        self.visual_linewise = false;
+        self.visual_block = true;
+        let c = self.buf().cursor;
+        self.visual_anchor = Some(c);
+        self.clear_pending();
+    }
+
+    pub fn block_range(&self) -> Option<(usize, usize, usize, usize)> {
+        let anchor = self.visual_anchor?;
+        let cur = self.buf().cursor;
+        let (a, b) = if (anchor.line, anchor.col) <= (cur.line, cur.col) {
+            (anchor, cur)
+        } else {
+            (cur, anchor)
+        };
+        Some((a.line, b.line, a.col, b.col))
+    }
+
+    pub fn block_apply(&mut self, op: mode::Operator) {
+        use mode::Operator as Op;
+        let Some((r0, r1, c0, c1)) = self.block_range() else {
+            return;
+        };
+        let width = c1 - c0 + 1;
+        let last = self.buf().rope.len_lines().saturating_sub(1);
+        let r1 = r1.min(last);
+        let mut yanked = Vec::new();
+        for line in r0..=r1 {
+            let text = crate::buffer::line_text(&self.buf().rope, line);
+            let seg: String = text.chars().skip(c0).take(width).collect();
+            yanked.push(format!("{:<w$}", seg, w = width));
+        }
+        let block = yanked.join("\n");
+        if op != Op::Change {
+            self.set_register(block.clone(), false);
+            self.reg_block = true;
+        }
+        if op != Op::Yank {
+            for line in r0..=r1 {
+                let len = line_chars(&self.buf().rope, line);
+                if len <= c0 {
+                    continue;
+                }
+                let end = (c1 + 1).min(len);
+                let b = self.buf_mut();
+                let off = b.rope.line_to_char(line);
+                b.rope.remove(off + c0..off + end);
+                b.after_edit();
+            }
+        }
+        self.mode = Mode::Normal;
+        self.visual_anchor = None;
+        self.visual_block = false;
+        self.buf_mut().clamp();
+        if op == Op::Change {
+            self.enter_insert();
+        }
     }
 
     pub fn sel_range(&self) -> ((Pos, Pos), bool) {
@@ -418,6 +495,7 @@ impl Editor {
     fn set_register(&mut self, text: String, linewise: bool) {
         self.register = text;
         self.reg_linewise = linewise;
+        self.reg_block = false;
         if self.config.clipboard
             && let Err(e) = crate::clipboard::set(&self.register)
         {
@@ -468,8 +546,35 @@ impl Editor {
         } else {
             None
         };
+        let clip_override = clip.clone().filter(|s| !s.is_empty());
         let (reg, linewise) = Self::paste_source(clip, &self.register, self.reg_linewise);
         if reg.is_empty() {
+            return;
+        }
+        if self.reg_block && clip_override.is_none() {
+            let segs: Vec<&str> = reg.split('\n').collect();
+            let c = self.buf().cursor;
+            let col = c.col + if after { 1 } else { 0 };
+            for (i, seg) in segs.iter().enumerate() {
+                let line = c.line + i;
+                while line >= self.buf().rope.len_lines() {
+                    let b = self.buf_mut();
+                    b.rope.insert(b.rope.len_chars(), "\n");
+                    b.after_edit();
+                }
+                let len = line_chars(&self.buf().rope, line);
+                let pad = " ".repeat(col.saturating_sub(len));
+                let b = self.buf_mut();
+                let off = b.rope.line_to_char(line) + len.min(col);
+                b.rope.insert(off, &format!("{pad}{seg}"));
+                b.after_edit();
+            }
+            let end = segs.last().unwrap_or(&"").chars().count();
+            self.buf_mut().cursor = Pos {
+                line: c.line + segs.len() - 1,
+                col: col + end,
+            };
+            self.buf_mut().clamp();
             return;
         }
         if linewise {

@@ -155,6 +155,7 @@ fn normal_key(ed: &mut Editor, key: &Key, mods: ModifiersState) {
         if ed.mode == Mode::Visual {
             ed.mode = Mode::Normal;
             ed.visual_anchor = None;
+            ed.visual_block = false;
         }
         return;
     }
@@ -167,6 +168,7 @@ fn normal_key(ed: &mut Editor, key: &Key, mods: ModifiersState) {
             Some("b") => ed.open_panel(crate::fuzzy::Panel::Buffers),
             Some("f") => ed.run_motion(Motion::PageDown, 1),
             Some("r") => ed.buf_mut().redo_action(),
+            Some("v") => ed.start_visual_block(),
             Some("c") | Some("[") => ed.leave_insert(),
             Some("a") => {
                 let c = ed.buf().cursor;
@@ -415,10 +417,15 @@ fn normal_key(ed: &mut Editor, key: &Key, mods: ModifiersState) {
 fn visual_key(ed: &mut Editor, k: &str, count: u32) {
     match k {
         "v" => {
-            ed.mode = Mode::Normal;
-            ed.visual_anchor = None;
+            if ed.visual_block {
+                ed.visual_block = false;
+            } else {
+                ed.mode = Mode::Normal;
+                ed.visual_anchor = None;
+            }
         }
         "V" => {
+            ed.visual_block = false;
             ed.visual_linewise = !ed.visual_linewise;
         }
         "h" | "j" | "k" | "l" | "w" | "W" | "b" | "B" | "e" | "E" | "0" | "^" | "$"
@@ -434,16 +441,24 @@ fn visual_key(ed: &mut Editor, k: &str, count: u32) {
         "i" => ed.pending = Pending::TextObj { op: Operator::Change, inner: true },
         "a" => ed.pending = Pending::TextObj { op: Operator::Change, inner: false },
         "d" | "c" | "y" => {
-            let ((a, b), lw) = ed.sel_range();
-            ed.op_apply(op_of(k), (a, b), lw);
-            ed.mode = Mode::Normal;
-            ed.visual_anchor = None;
+            if ed.visual_block {
+                ed.block_apply(op_of(k));
+            } else {
+                let ((a, b), lw) = ed.sel_range();
+                ed.op_apply(op_of(k), (a, b), lw);
+                ed.mode = Mode::Normal;
+                ed.visual_anchor = None;
+            }
         }
         "x" => {
-            let ((a, b), lw) = ed.sel_range();
-            ed.op_apply(Operator::Delete, (a, b), lw);
-            ed.mode = Mode::Normal;
-            ed.visual_anchor = None;
+            if ed.visual_block {
+                ed.block_apply(Operator::Delete);
+            } else {
+                let ((a, b), lw) = ed.sel_range();
+                ed.op_apply(Operator::Delete, (a, b), lw);
+                ed.mode = Mode::Normal;
+                ed.visual_anchor = None;
+            }
         }
         ">" => {
             let ((a, b), _) = ed.sel_range();
@@ -458,10 +473,18 @@ fn visual_key(ed: &mut Editor, k: &str, count: u32) {
             ed.visual_anchor = None;
         }
         "p" => {
-            let ((a, b), _) = ed.sel_range();
-            ed.buf_mut().delete_text(a, b);
-            ed.mode = Mode::Normal;
-            ed.visual_anchor = None;
+            let (reg, lw, blk) = (ed.register.clone(), ed.reg_linewise, ed.reg_block);
+            if ed.visual_block {
+                ed.block_apply(Operator::Delete);
+            } else {
+                let ((a, b), _) = ed.sel_range();
+                ed.buf_mut().delete_text(a, b);
+                ed.mode = Mode::Normal;
+                ed.visual_anchor = None;
+            }
+            ed.register = reg;
+            ed.reg_linewise = lw;
+            ed.reg_block = blk;
             ed.paste(true);
         }
         _ => {}
@@ -1105,5 +1128,107 @@ mod tests {
         assert_eq!(ed.config.theme, dark_cfg);
         assert_eq!(ed.theme.bg, dark_bg);
         assert_eq!(ed.status.as_deref(), Some("dark mode"));
+    }
+
+    #[test]
+    fn ctrl_v_enters_and_leaves_block_visual() {
+        let mut ed = Editor::new(None);
+        ed.buf_mut().insert_text("alpha\nbeta\n", false);
+        ed.buf_mut().cursor = Pos { line: 0, col: 0 };
+        key_down(&mut ed, &Key::Character("v".into()), ModifiersState::CONTROL);
+        assert_eq!(ed.mode, Mode::Visual);
+        assert!(ed.visual_block);
+        assert_eq!(ed.block_range(), Some((0, 0, 0, 0)));
+        ed.buf_mut().cursor = Pos { line: 1, col: 2 };
+        assert_eq!(ed.block_range(), Some((0, 1, 0, 2)));
+        key_down(&mut ed, &Key::Character("v".into()), ModifiersState::CONTROL);
+        assert_eq!(ed.mode, Mode::Normal);
+        assert!(!ed.visual_block);
+        assert_eq!(ed.visual_anchor, None);
+    }
+
+    #[test]
+    fn block_yank_pads_short_lines_into_the_register() {
+        let mut ed = Editor::new(None);
+        ed.config.clipboard = false;
+        ed.buf_mut().insert_text("alpha\nbeta\ngamma\n", false);
+        ed.buf_mut().cursor = Pos { line: 0, col: 1 };
+        key_down(&mut ed, &Key::Character("v".into()), ModifiersState::CONTROL);
+        ed.buf_mut().cursor = Pos { line: 2, col: 3 };
+        type_keys(&mut ed, &[Key::Character("y".into())]);
+        assert_eq!(ed.register, "lph\neta\namm");
+        assert!(ed.reg_block);
+        assert!(!ed.reg_linewise);
+        assert_eq!(ed.buf().rope.to_string(), "alpha\nbeta\ngamma\n");
+        assert_eq!(ed.mode, Mode::Normal);
+    }
+
+    #[test]
+    fn block_delete_clamps_to_short_lines() {
+        let mut ed = Editor::new(None);
+        ed.config.clipboard = false;
+        ed.buf_mut().insert_text("alpha\nx\nb\ngamma\n", false);
+        ed.buf_mut().cursor = Pos { line: 0, col: 1 };
+        key_down(&mut ed, &Key::Character("v".into()), ModifiersState::CONTROL);
+        ed.buf_mut().cursor = Pos { line: 3, col: 3 };
+        type_keys(&mut ed, &[Key::Character("d".into())]);
+        assert_eq!(ed.buf().rope.to_string(), "aa\nx\nb\nga\n");
+        assert_eq!(ed.register, "lph\n   \n   \namm");
+        assert!(ed.reg_block);
+    }
+
+    #[test]
+    fn block_paste_inserts_each_segment_on_its_line() {
+        let mut ed = Editor::new(None);
+        ed.config.clipboard = false;
+        ed.buf_mut().insert_text("aaa\nbbb\nccc\n", false);
+        ed.buf_mut().cursor = Pos { line: 0, col: 0 };
+        ed.register = "XY\nYZ".into();
+        ed.reg_block = true;
+        ed.paste(true);
+        assert_eq!(ed.buf().rope.to_string(), "aXYaa\nbYZbb\nccc\n");
+    }
+
+    #[test]
+    fn block_paste_pads_lines_shorter_than_the_column() {
+        let mut ed = Editor::new(None);
+        ed.config.clipboard = false;
+        ed.buf_mut().insert_text("q\nx\n", false);
+        ed.buf_mut().cursor = Pos { line: 0, col: 2 };
+        ed.register = "AB".into();
+        ed.reg_block = true;
+        ed.paste(true);
+        assert_eq!(ed.buf().rope.to_string(), "q  AB\nx\n");
+    }
+
+    #[test]
+    fn block_change_deletes_and_enters_insert_keeping_the_register() {
+        let mut ed = Editor::new(None);
+        ed.config.clipboard = false;
+        ed.buf_mut().insert_text("alpha\nbeta\n", false);
+        ed.register = "keep".into();
+        ed.buf_mut().cursor = Pos { line: 0, col: 1 };
+        key_down(&mut ed, &Key::Character("v".into()), ModifiersState::CONTROL);
+        ed.buf_mut().cursor = Pos { line: 1, col: 1 };
+        type_keys(&mut ed, &[Key::Character("c".into())]);
+        assert_eq!(ed.buf().rope.to_string(), "apha\nbta\n");
+        assert_eq!(ed.register, "keep");
+        assert_eq!(ed.mode, Mode::Insert);
+    }
+
+    #[test]
+    fn v_converts_block_to_charwise_and_escape_exits() {
+        let mut ed = Editor::new(None);
+        ed.buf_mut().insert_text("alpha\nbeta\n", false);
+        ed.buf_mut().cursor = Pos { line: 0, col: 1 };
+        key_down(&mut ed, &Key::Character("v".into()), ModifiersState::CONTROL);
+        ed.buf_mut().cursor = Pos { line: 1, col: 3 };
+        type_keys(&mut ed, &[Key::Character("v".into())]);
+        assert_eq!(ed.mode, Mode::Visual);
+        assert!(!ed.visual_block);
+        assert_eq!(ed.visual_anchor, Some(Pos { line: 0, col: 1 }));
+        type_keys(&mut ed, &[Key::Named(NamedKey::Escape)]);
+        assert_eq!(ed.mode, Mode::Normal);
+        assert_eq!(ed.visual_anchor, None);
     }
 }

@@ -352,6 +352,33 @@ pub fn draw_content(
         }
     }
     if ed.mode == crate::mode::Mode::Visual {
+        if let Some((r0, r1, c0, c1)) = ed.visual_block.then_some(ed.block_range()).flatten() {
+            for (r, scr) in rows.iter().enumerate() {
+                if scr.line < r0 || scr.line > r1 || scr.line >= buf.rope.len_lines() {
+                    continue;
+                }
+                let raw = crate::buffer::line_text(&buf.rope, scr.line);
+                let len = raw.chars().count();
+                let x = (gutter + wrap.pos(&raw, c0.min(len)).1) as f32 * cw;
+                let mut width =
+                    (gutter + wrap.pos(&raw, (c1 + 1).min(len)).1) as f32 * cw - x;
+                if c1 + 1 > len {
+                    width += (c1 + 1 - len) as f32 * cw;
+                }
+                if width <= 0.0 {
+                    continue;
+                }
+                rects.push(rects::RectInstance {
+                    x,
+                    y: (1 + r) as f32 * ch,
+                    w: width,
+                    h: ch,
+                    color: theme.selection,
+                });
+            }
+        }
+    }
+    if ed.mode == crate::mode::Mode::Visual && !ed.visual_block {
         let ((sa, sb), lw) = ed.sel_range();
         for (r, scr) in rows.iter().enumerate() {
             let line = scr.line;
@@ -448,7 +475,13 @@ pub fn draw_content(
     let mode_label = match ed.mode {
         crate::mode::Mode::Normal => "NORMAL",
         crate::mode::Mode::Insert => "INSERT",
-        crate::mode::Mode::Visual => "VISUAL",
+        crate::mode::Mode::Visual => {
+            if ed.visual_block {
+                "BLOCK"
+            } else {
+                "VISUAL"
+            }
+        }
         crate::mode::Mode::Command(k) => match k {
             crate::mode::CmdKind::Ex => "-- EX --",
             crate::mode::CmdKind::Search | crate::mode::CmdKind::SearchBack => "-- SEARCH --",
