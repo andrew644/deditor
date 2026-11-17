@@ -240,6 +240,23 @@ impl Editor {
         b.view_sub = sub;
     }
 
+    pub fn center_cursor(&mut self, rows: usize) {
+        let rows = rows.max(1);
+        let wrap = self.wrap();
+        let (top, sub) = {
+            let b = self.buf();
+            let cursor_row = wrap.row_of(&b.rope, b.cursor);
+            let total = wrap.total_rows(&b.rope);
+            let top_row = cursor_row
+                .saturating_sub(rows / 2)
+                .min(total.saturating_sub(rows));
+            wrap.anchor(&b.rope, top_row)
+        };
+        let b = self.buf_mut();
+        b.view_top = top;
+        b.view_sub = sub;
+    }
+
 
     pub fn clear_pending(&mut self) {
         self.pending = mode::Pending::None;
@@ -1590,5 +1607,65 @@ mod tests {
             ed.wrap().screen_row(&b.rope, b.view_top, b.view_sub, b.cursor),
             Some(2)
         );
+    }
+
+    #[test]
+    fn centering_puts_the_cursor_mid_screen() {
+        let mut ed = ed_with(&"x\n".repeat(100));
+        ed.buf_mut().cursor = Pos { line: 40, col: 0 };
+        ed.center_cursor(10);
+        let b = ed.buf();
+        assert_eq!((b.view_top, b.view_sub), (35, 0));
+        assert_eq!(
+            ed.wrap().screen_row(&b.rope, b.view_top, b.view_sub, b.cursor),
+            Some(5)
+        );
+    }
+
+    #[test]
+    fn centering_stays_flush_with_the_end_of_the_buffer() {
+        let mut ed = ed_with(&"x\n".repeat(10));
+        ed.buf_mut().cursor = Pos { line: 9, col: 0 };
+        ed.center_cursor(6);
+        let b = ed.buf();
+        assert_eq!((b.view_top, b.view_sub), (5, 0));
+        assert_eq!(
+            ed.wrap().screen_row(&b.rope, b.view_top, b.view_sub, b.cursor),
+            Some(4)
+        );
+
+        ed.buf_mut().cursor = Pos { line: 10, col: 0 };
+        ed.center_cursor(6);
+        assert_eq!((ed.buf().view_top, ed.buf().view_sub), (5, 0));
+
+        let mut short = ed_with("a\nb\n");
+        short.buf_mut().cursor = Pos { line: 2, col: 0 };
+        short.center_cursor(10);
+        assert_eq!((short.buf().view_top, short.buf().view_sub), (0, 0));
+    }
+
+    #[test]
+    fn centering_counts_wrapped_rows() {
+        let long = "y".repeat(20);
+        let mut ed = ed_with(&format!("{}\n", long).repeat(8));
+        ed.view_cols = 10;
+        ed.buf_mut().cursor = Pos { line: 5, col: 15 };
+        ed.center_cursor(6);
+        let b = ed.buf();
+        assert_eq!((b.view_top, b.view_sub), (4, 0));
+        assert_eq!(
+            ed.wrap().screen_row(&b.rope, b.view_top, b.view_sub, b.cursor),
+            Some(3)
+        );
+    }
+
+    #[test]
+    fn centering_survives_the_frame_scroll_clamp() {
+        let mut ed = ed_with(&"x\n".repeat(100));
+        ed.buf_mut().cursor = Pos { line: 40, col: 0 };
+        ed.center_cursor(10);
+        let before = (ed.buf().view_top, ed.buf().view_sub);
+        ed.scroll_to_cursor(10);
+        assert_eq!((ed.buf().view_top, ed.buf().view_sub), before);
     }
 }

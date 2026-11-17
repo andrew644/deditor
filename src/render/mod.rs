@@ -796,6 +796,7 @@ fn pending_label(ed: &crate::app::Editor) -> String {
             });
         }
         Pending::G => s.push('g'),
+        Pending::Z => s.push('z'),
         Pending::F { forward, to } => {
             s.push(match (forward, to) {
                 (true, true) => 'f',

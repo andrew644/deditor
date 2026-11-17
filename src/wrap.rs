@@ -221,6 +221,38 @@ impl Wrap {
         Some(row)
     }
 
+    /// Absolute screen row of `pos`, counted from the buffer's first row.
+    pub fn row_of(&self, rope: &Rope, pos: Pos) -> usize {
+        let line = pos.line.min(rope.len_lines().saturating_sub(1));
+        let mut row = 0;
+        for l in 0..line {
+            row += self.row_count(&line_text(rope, l));
+        }
+        row + self.pos(&line_text(rope, line), pos.col).0
+    }
+
+    /// The `(line, sub-row)` holding absolute screen row `row`, clamped to the
+    /// buffer's last row.
+    pub fn anchor(&self, rope: &Rope, row: usize) -> (usize, usize) {
+        let mut left = row;
+        for line in 0..rope.len_lines() {
+            let rows = self.row_count(&line_text(rope, line));
+            if left < rows {
+                return (line, left);
+            }
+            left -= rows;
+        }
+        let last = rope.len_lines().saturating_sub(1);
+        (last, self.row_count(&line_text(rope, last)).saturating_sub(1))
+    }
+
+    /// How many screen rows the whole buffer occupies.
+    pub fn total_rows(&self, rope: &Rope) -> usize {
+        (0..rope.len_lines())
+            .map(|l| self.row_count(&line_text(rope, l)))
+            .sum()
+    }
+
     /// The `(line, sub-row)` reached by moving `delta` screen rows from
     /// `pos`, clamped to the first and last row of the buffer.
     pub fn shift(&self, rope: &Rope, pos: Pos, delta: i64) -> (usize, usize) {
@@ -358,5 +390,19 @@ mod tests {
         );
         assert_eq!(w.screen_row(&r, 1, 1, Pos { line: 1, col: 0 }), None);
         assert_eq!(w.screen_row(&r, 1, 1, Pos { line: 2, col: 1 }), Some(1));
+    }
+
+    #[test]
+    fn absolute_rows_round_trip_to_anchors() {
+        let r = rope("aaa\nbbbbbb\nccc\nd");
+        let w = Wrap::new(3, 4);
+        assert_eq!(w.total_rows(&r), 5);
+        assert_eq!(w.row_of(&r, Pos { line: 0, col: 2 }), 0);
+        assert_eq!(w.row_of(&r, Pos { line: 1, col: 4 }), 2);
+        assert_eq!(w.row_of(&r, Pos { line: 3, col: 0 }), 4);
+        assert_eq!(w.anchor(&r, 0), (0, 0));
+        assert_eq!(w.anchor(&r, 2), (1, 1));
+        assert_eq!(w.anchor(&r, 4), (3, 0));
+        assert_eq!(w.anchor(&r, 99), (3, 0));
     }
 }

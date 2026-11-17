@@ -72,6 +72,7 @@ fn leak_char(c: char) -> Option<&'static str> {
         'A' => "A",
         'v' => "v",
         'V' => "V",
+        'z' => "z",
         'u' => "u",
         '$' => "$",
         '^' => "^",
@@ -173,6 +174,15 @@ fn normal_key(ed: &mut Editor, key: &Key, mods: ModifiersState) {
             ed.count = 0;
             return;
         }
+        Pending::Z => {
+            ed.pending = Pending::None;
+            if matches!(k, Some("z")) {
+                let rows = ed.view_rows;
+                ed.center_cursor(rows);
+            }
+            ed.count = 0;
+            return;
+        }
         Pending::F { forward, to } => {
             ed.pending = Pending::None;
             if let Some(s) = key_text(key) {
@@ -257,6 +267,7 @@ fn normal_key(ed: &mut Editor, key: &Key, mods: ModifiersState) {
         }
         "G" => ed.run_motion(Motion::G, count),
         "g" => ed.pending = Pending::G,
+        "z" => ed.pending = Pending::Z,
         "K" => ed.hover_cur(),
         "f" => ed.pending = Pending::F { forward: true, to: true },
         "F" => ed.pending = Pending::F { forward: false, to: true },
@@ -758,6 +769,49 @@ mod tests {
         assert_eq!(ed.buf().rope.len_lines(), 30);
         assert_eq!(ed.buf().rope.line(10).to_string(), "line 21\n");
         assert_eq!(ed.mode, Mode::Normal);
+    }
+
+    #[test]
+    fn zz_centers_the_viewport_on_the_cursor() {
+        let mut ed = Editor::new(None);
+        let body: String = (0..40).map(|i| format!("line {i}\n")).collect();
+        ed.buf_mut().insert_text(&body, false);
+        ed.view_rows = 10;
+        ed.buf_mut().cursor = Pos { line: 30, col: 2 };
+        type_keys(&mut ed, &[Key::Character("z".into())]);
+        assert_eq!(ed.pending, Pending::Z);
+        assert_eq!(ed.buf().view_top, 0);
+        type_keys(&mut ed, &[Key::Character("z".into())]);
+        let b = ed.buf();
+        assert_eq!((b.view_top, b.view_sub), (25, 0));
+        let drawn = ed
+            .wrap()
+            .screen_rows(&b.rope, b.view_top, b.view_sub, 10)
+            .iter()
+            .map(|r| r.line)
+            .collect::<Vec<_>>();
+        assert_eq!(drawn, (25..35).collect::<Vec<_>>());
+        assert_eq!(
+            ed.wrap().screen_row(&b.rope, b.view_top, b.view_sub, b.cursor),
+            Some(5)
+        );
+        assert_eq!(ed.pending, Pending::None);
+    }
+
+    #[test]
+    fn z_then_another_key_leaves_the_view_alone() {
+        let mut ed = Editor::new(None);
+        let body: String = (0..40).map(|i| format!("line {i}\n")).collect();
+        ed.buf_mut().insert_text(&body, false);
+        ed.view_rows = 10;
+        ed.buf_mut().cursor = Pos { line: 30, col: 2 };
+        type_keys(
+            &mut ed,
+            &[Key::Character("z".into()), Key::Character("j".into())],
+        );
+        assert_eq!(ed.pending, Pending::None);
+        assert_eq!(ed.buf().cursor, Pos { line: 30, col: 2 });
+        assert_eq!(ed.buf().view_top, 0);
     }
 
     #[test]

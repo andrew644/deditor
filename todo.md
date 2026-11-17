@@ -2,8 +2,8 @@
 - When a pending key like f is pressed and I want to go forward to capital 'P' when I hit shift to get the P key, it ends the pending f press.
 - :590 should jump to line 590.
 - '*' on word should search for word.
-- z z should center the screen
 - :pwd to see what directory we are running in
+- :pwd /path to change pwd to /path
 - :e new_file_name.txt should create a blank file called file_name.txt in the pwd.
 - lsp stuff should only run in programming files.
 - ctrl-P should do a fuzzy find as the user types a path. So user types ~/ and it will show files in ~/ 
@@ -11,3 +11,18 @@
 - Create readme with every command in every mode.
 - o on the last line doesn't move the cursor, only creates the new line.
 - dd on the last blank line doesn't delete the line.
+- Windows - clipboard copy/paste not working
+- Windows - When the .exe is double clicked, it also spawns a terminal window
+- Windows - The config directory should be %LOCALAPPDATA%\deditor\
+- Wayland - please use the appropriate Wayland protocols for interacting with the Wayland clipboard (wl_data_device from the core Wayland protocol, the primary_selection protocol for the primary selection), for example via the smithay-clipboard crate.
+- Press a button to make a context menu pop-up on a word. E.g. it shows which keys you can use like gd for go to definition etc. Context aware.
+- A way to close tabs - :c to close current one :c 4 to close 4
+- LINE 1, COL 1 should be 1:1
+- F2 Show whitespace characters
+- F3 toggle dark/light mode
+- F1 spellcheck enabled/disabled.
+- :e file.txt should open in a new buffer
+- v selection displays off by one on the right. Selection is correct though.
+- Add box select like nvim with ctrl-v
+- ctrl-p for already opened buffer shoudn't open new tab
+
