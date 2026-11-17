@@ -11,15 +11,13 @@ orphans `rust-analyzer` (clean exits still kill it via `Drop`). The
 proper fix is a kill-on-close job object around the spawned server;
 it cannot be verified from this Linux machine.
 
-## Rust-analyzer restart storms
+## No automatic restart of a crashed language server
 
-`ensure_lsp` respawns the configured server whenever the active
-buffer's server changes and after a failed spawn is only remembered
-per binary (`failed` list). A server binary that dies immediately
-after a successful spawn (bad config, OOM) can be respawned on every
-`activate`/`open_path`. Unverified on this machine — needs an
-environment where a server crashes in its init handshake to confirm
-the respawn cadence is actually user-visible before adding backoff.
+A server that exits is reaped on the next poll, reported once in the
+status line, and blacklisted for the rest of the session, so it is
+spawned at most once and never respawns. Recovering a crashed server
+means restarting the editor; auto-restart would need a respawn policy
+(backoff, attempt caps) that does not exist yet.
 
 ## Search materializes the whole buffer on every step
 
