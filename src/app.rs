@@ -1247,14 +1247,16 @@ impl Editor {
     pub fn hover_cur(&mut self) {
         if let Some(p) = self.buf().path.clone() {
             let c = self.buf().cursor;
-            self.lsp.hover_at(&p, c);
+            let line = crate::buffer::line_text(&self.buf().rope, c.line);
+            self.lsp.hover_at(&p, c, &line);
         }
     }
 
     pub fn goto_definition_cur(&mut self) {
         if let Some(p) = self.buf().path.clone() {
             let c = self.buf().cursor;
-            self.lsp.goto_definition(&p, c);
+            let line = crate::buffer::line_text(&self.buf().rope, c.line);
+            self.lsp.goto_definition(&p, c, &line);
         }
     }
 
@@ -1394,6 +1396,14 @@ impl Editor {
                         .position(|b| b.path.as_ref().is_some_and(|q| same_path(q, &path)))
                     {
                         self.activate(i);
+                        let col = if line < self.buf().rope.len_lines() {
+                            crate::lsp::char_col(
+                                &crate::buffer::line_text(&self.buf().rope, line),
+                                col,
+                            )
+                        } else {
+                            col
+                        };
                         self.buf_mut().cursor = Pos { line, col };
                         let rows = self.view_rows.max(1);
                         self.scroll_to_cursor(rows);
@@ -1404,6 +1414,9 @@ impl Editor {
                 }
                 crate::lsp::Ev::NoDef => {
                     self.set_status("No definition found".into(), true);
+                }
+                crate::lsp::Ev::Timeout => {
+                    self.set_status("LSP request timed out".into(), true);
                 }
             }
         }

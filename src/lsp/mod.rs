@@ -32,6 +32,7 @@ pub enum Ev {
         col: usize,
     },
     NoDef,
+    Timeout,
 }
 
 #[derive(PartialEq, Clone, Copy)]
@@ -66,6 +67,7 @@ pub struct LspManager {
     pending_open: Vec<PathBuf>,
     pub waiting: Wait,
     pub waiting_id: Option<u64>,
+    waiting_since: Option<std::time::Instant>,
     pub hover: Option<String>,
     pub diags: HashMap<PathBuf, Vec<Diag>>,
     pub completion: Option<CompletionState>,
@@ -120,6 +122,7 @@ impl LspManager {
             pending_open: Vec::new(),
             waiting: Wait::None,
             waiting_id: None,
+            waiting_since: None,
             hover: None,
             diags: HashMap::new(),
             completion: None,
@@ -242,19 +245,19 @@ impl LspManager {
         self.sync_full(path, text);
     }
 
-    fn doc_json(path: &Path, p: Pos) -> Option<serde_json::Value> {
+    fn doc_json(path: &Path, p: Pos, line: &str) -> Option<serde_json::Value> {
         let uri = file_url(path)?;
         Some(json!({
             "textDocument": { "uri": uri },
-            "position": { "line": p.line, "character": p.col }
+            "position": { "line": p.line, "character": utf16_col(line, p.col) }
         }))
     }
 
-    pub fn hover_at(&mut self, path: &Path, p: Pos) {
+    pub fn hover_at(&mut self, path: &Path, p: Pos, line: &str) {
         if self.phase != Phase::Ready {
             return;
         }
-        let Some(params) = Self::doc_json(path, p) else {
+        let Some(params) = Self::doc_json(path, p, line) else {
             return;
         };
         self.hover = None;
@@ -262,20 +265,22 @@ impl LspManager {
             let id = c.request("textDocument/hover", params);
             self.waiting = Wait::Hover;
             self.waiting_id = Some(id);
+            self.waiting_since = Some(std::time::Instant::now());
         }
     }
 
-    pub fn goto_definition(&mut self, path: &Path, p: Pos) {
+    pub fn goto_definition(&mut self, path: &Path, p: Pos, line: &str) {
         if self.phase != Phase::Ready {
             return;
         }
-        let Some(params) = Self::doc_json(path, p) else {
+        let Some(params) = Self::doc_json(path, p, line) else {
             return;
         };
         if let Some(c) = self.client.as_mut() {
             let id = c.request("textDocument/definition", params);
             self.waiting = Wait::Goto;
             self.waiting_id = Some(id);
+            self.waiting_since = Some(std::time::Instant::now());
         }
     }
 
@@ -284,7 +289,8 @@ impl LspManager {
             return;
         }
         self.sync_full(path, text);
-        let Some(params) = Self::doc_json(path, p) else {
+        let line = text.lines().nth(p.line).unwrap_or("");
+        let Some(params) = Self::doc_json(path, p, line) else {
             return;
         };
         self.completion_seq += 1;
@@ -302,6 +308,7 @@ impl LspManager {
             let id = c.request("textDocument/completion", params);
             self.waiting = Wait::Completion;
             self.waiting_id = Some(id);
+            self.waiting_since = Some(std::time::Instant::now());
         }
     }
 
@@ -334,6 +341,17 @@ impl LspManager {
                 msgs.push(m);
             }
         }
+        if self.waiting != Wait::None
+            && self
+                .waiting_since
+                .is_some_and(|t| t.elapsed() > std::time::Duration::from_secs(15))
+        {
+            self.waiting = Wait::None;
+            self.waiting_id = None;
+            self.waiting_since = None;
+            return vec![Ev::Timeout];
+        }
+
         if !msgs.is_empty() {
             self.last_rx = Some(std::time::Instant::now());
         }
@@ -432,6 +450,20 @@ impl LspManager {
         }
         evs
     }
+}
+fn utf16_col(line: &str, col: usize) -> usize {
+    line.chars().take(col).map(|c| c.len_utf16()).sum()
+}
+
+pub fn char_col(line: &str, target: usize) -> usize {
+    let mut acc = 0;
+    for (c, i) in line.chars().zip(0..) {
+        if target < acc + c.len_utf16() {
+            return i;
+        }
+        acc += c.len_utf16();
+    }
+    line.chars().count()
 }
 
 pub fn parse_hover(result: Option<&serde_json::Value>) -> Option<String> {
@@ -733,5 +765,19 @@ mod tests {
             }
             _ => panic!("expected notification echo, got other message"),
         }
+    }
+
+    #[test]
+    fn utf16_columns_round_trip_around_astral_chars() {
+        let line = "a😀b";
+        assert_eq!(utf16_col(line, 0), 0);
+        assert_eq!(utf16_col(line, 1), 1);
+        assert_eq!(utf16_col(line, 2), 3);
+        assert_eq!(utf16_col(line, 3), 4);
+        for c in 0..=3 {
+            assert_eq!(char_col(line, utf16_col(line, c)), c);
+        }
+        assert_eq!(char_col(line, 2), 1);
+        assert_eq!(char_col(line, 99), 3);
     }
 }
