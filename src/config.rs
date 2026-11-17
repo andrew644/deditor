@@ -50,6 +50,42 @@ impl Default for Theme {
     }
 }
 
+fn flip_hex(s: &str) -> String {
+    let Some(v) = parse_hex(s) else {
+        return s.to_string();
+    };
+    let (r, g, b) = ((v >> 16) & 0xFF, (v >> 8) & 0xFF, v & 0xFF);
+    let mx = r.max(g).max(b);
+    let mn = r.min(g).min(b);
+    if mx - mn > 32 {
+        return s.to_string();
+    }
+    let v = (255 - r) << 16 | (255 - g) << 8 | (255 - b);
+    format!("#{v:06x}")
+}
+
+/// Mirrors every near-neutral color around mid gray so the palette swaps
+/// between dark and light. Saturated accents keep their identity, and the
+/// transform is its own inverse.
+pub fn flip_lightness(t: &Theme) -> Theme {
+    Theme {
+        fg: flip_hex(&t.fg),
+        bg: flip_hex(&t.bg),
+        gutter_fg: flip_hex(&t.gutter_fg),
+        selection: flip_hex(&t.selection),
+        cursorline: flip_hex(&t.cursorline),
+        tab_active: flip_hex(&t.tab_active),
+        tab_inactive: flip_hex(&t.tab_inactive),
+        status_bg: flip_hex(&t.status_bg),
+        accent: flip_hex(&t.accent),
+        error: flip_hex(&t.error),
+        warn: flip_hex(&t.warn),
+        popup_bg: flip_hex(&t.popup_bg),
+        popup_fg: flip_hex(&t.popup_fg),
+        popup_sel: flip_hex(&t.popup_sel),
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct FontCfg {
@@ -410,5 +446,30 @@ mod tests {
         let text = include_str!("../config.example.yaml");
         let c: Config = serde_yaml_ng::from_str(text).unwrap();
         assert_eq!(c, Config::default());
+    }
+
+    #[test]
+    fn lightness_flip_swaps_dark_and_light_exactly() {
+        let dark = Theme::default();
+        let light = flip_lightness(&dark);
+        assert_eq!(light.bg, "#e3e3df");
+        assert_eq!(light.fg, "#272725");
+        let lum = |s: &str| {
+            let v = parse_hex(s).unwrap();
+            ((v >> 16) & 0xFF) + ((v >> 8) & 0xFF) + (v & 0xFF)
+        };
+        assert!(lum(&light.bg) > lum(&light.fg));
+        assert_eq!(light.accent, dark.accent);
+        assert_eq!(light.error, dark.error);
+        assert_eq!(light.warn, dark.warn);
+        assert_eq!(flip_lightness(&light), dark);
+    }
+
+    #[test]
+    fn flip_hex_keeps_saturated_and_broken_colors() {
+        assert_eq!(flip_hex("#7aa2f7"), "#7aa2f7");
+        assert_eq!(flip_hex("#3a3d4a"), "#c5c2b5");
+        assert_eq!(flip_hex("nonsense"), "nonsense");
+        assert_eq!(flip_hex("#12"), "#12");
     }
 }

@@ -1,5 +1,4 @@
 # TODO
-- F3 toggle dark/light mode
 - :e file.txt should open in a new buffer
 - v selection displays off by one on the right. Selection is correct though.
 - Add box select like nvim with ctrl-v

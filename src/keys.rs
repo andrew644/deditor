@@ -26,6 +26,22 @@ fn key_down(ed: &mut Editor, key: &Key, mods: ModifiersState) {
         );
         return;
     }
+    if *key == Key::Named(NamedKey::F3) {
+        ed.config.theme = crate::config::flip_lightness(&ed.config.theme);
+        let (theme, warns) = crate::config::RgbTheme::from_theme_checked(&ed.config.theme);
+        ed.theme = theme;
+        if let Some(w) = warns.first() {
+            ed.status = Some(w.clone());
+            ed.status_err = true;
+        } else {
+            let bg = ed.theme.bg;
+            let lum =
+                (((bg >> 16) & 0xFF) + ((bg >> 8) & 0xFF) + (bg & 0xFF)) / 3;
+            let label = if lum > 127 { "light" } else { "dark" };
+            ed.set_status(format!("{label} mode"), false);
+        }
+        return;
+    }
     if ed.panel != crate::fuzzy::Panel::None {
         panel_key(ed, key, mods);
         return;
@@ -1061,6 +1077,7 @@ mod tests {
     #[test]
     fn f2_toggles_whitespace_visibility_in_every_mode() {
         let mut ed = Editor::new(None);
+        ed.config.show_whitespace = false;
         type_keys(&mut ed, &[Key::Named(NamedKey::F2)]);
         assert!(ed.config.show_whitespace);
         assert_eq!(ed.status.as_deref(), Some("show whitespace: true"));
@@ -1071,5 +1088,22 @@ mod tests {
         ed.mode = Mode::Normal;
         type_keys(&mut ed, &[Key::Named(NamedKey::F2)]);
         assert!(ed.config.show_whitespace);
+    }
+
+    #[test]
+    fn f3_swaps_theme_to_light_and_back() {
+        let mut ed = Editor::new(None);
+        ed.config.theme = crate::config::Theme::default();
+        ed.theme = crate::config::RgbTheme::from_theme_checked(&ed.config.theme).0;
+        let dark_cfg = ed.config.theme.clone();
+        let dark_bg = ed.theme.bg;
+        type_keys(&mut ed, &[Key::Named(NamedKey::F3)]);
+        assert_ne!(ed.config.theme, dark_cfg);
+        assert!(ed.theme.bg > dark_bg);
+        assert_eq!(ed.status.as_deref(), Some("light mode"));
+        type_keys(&mut ed, &[Key::Named(NamedKey::F3)]);
+        assert_eq!(ed.config.theme, dark_cfg);
+        assert_eq!(ed.theme.bg, dark_bg);
+        assert_eq!(ed.status.as_deref(), Some("dark mode"));
     }
 }
