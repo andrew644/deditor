@@ -200,17 +200,28 @@ pub struct Layout {
     pub gutter_cols: u32,
 }
 
+pub fn tab_label(i: usize, b: &crate::buffer::Buffer) -> String {
+    format!(
+        " {} {}{} ",
+        i + 1,
+        b.display_name(),
+        if b.dirty { "+" } else { "" }
+    )
+}
+
+pub fn gutter_cols(ed: &crate::app::Editor) -> u32 {
+    if ed.config.line_numbers {
+        (ed.buf().rope.len_lines().max(1).to_string().len() as u32) + 2
+    } else {
+        0
+    }
+}
+
 pub fn tab_hit_ranges(ed: &crate::app::Editor, cw: f32) -> Vec<(f32, f32)> {
     let mut out = Vec::new();
     let mut x = 0.0f32;
     for (i, b) in ed.buffers.iter().enumerate() {
-        let label = format!(
-            " {} {}{} ",
-            i + 1,
-            b.display_name(),
-            if b.dirty { "+" } else { "" }
-        );
-        let wid = label.chars().count() as f32 * cw;
+        let wid = tab_label(i, b).chars().count() as f32 * cw;
         out.push((x, x + wid));
         x += wid;
     }
@@ -224,11 +235,7 @@ impl Layout {
         let cols = (gpu.config.width as f32 / cw) as u32;
         let total = (gpu.config.height as f32 / ch) as u32;
         let rows = total.saturating_sub(2);
-        let gutter_cols = if ed.config.line_numbers {
-            (ed.buf().rope.len_lines().max(1).to_string().len() as u32) + 2
-        } else {
-            0
-        };
+        let gutter_cols = gutter_cols(ed);
         Self {
             cols,
             rows,
@@ -266,12 +273,7 @@ pub fn draw_content(
     });
     let mut tab_text = String::new();
     for (i, b) in ed.buffers.iter().enumerate() {
-        let label = format!(
-            " {} {}{} ",
-            i + 1,
-            b.display_name(),
-            if b.dirty { "+" } else { "" }
-        );
+        let label = tab_label(i, b);
         let start = tab_text.chars().count() as f32 * cw;
         tab_text.push_str(&label);
         rects.push(rects::RectInstance {
@@ -672,15 +674,24 @@ pub fn draw_content(
     if popup_open {
         let max_rows = 15usize;
         let shown = ed.panel_order.len().min(max_rows);
+        let start = if ed.panel_cursor < max_rows {
+            0
+        } else {
+            ed.panel_cursor - max_rows + 1
+        };
+        let sel_row = ed
+            .panel_cursor
+            .saturating_sub(start)
+            .min(shown.saturating_sub(1));
         let box_cols = (l.cols as f32 * 0.5).max(40.0).min(l.cols as f32) as usize;
         let pw = box_cols as f32 * cw;
         popup_s.push_str(&pad_line(&ed.panel_query, box_cols));
-        for (row, &idx) in ed.panel_order.iter().take(max_rows).enumerate() {
+        for (row, &idx) in ed.panel_order.iter().skip(start).take(max_rows).enumerate() {
             popup_s.push('\n');
             popup_s.push_str(&pad_line(
                 &format!(
                     "{}{}",
-                    if row == ed.panel_cursor { "> " } else { "  " },
+                    if row == sel_row { "> " } else { "  " },
                     ed.panel_items[idx]
                 ),
                 box_cols,
@@ -696,7 +707,7 @@ pub fn draw_content(
         if !ed.panel_order.is_empty() {
             overlay.push(rects::RectInstance {
                 x: 0.0,
-                y: (2 + ed.panel_cursor.min(shown.saturating_sub(1))) as f32 * ch,
+                y: (2 + sel_row) as f32 * ch,
                 w: pw,
                 h: ch,
                 color: theme.popup_sel,

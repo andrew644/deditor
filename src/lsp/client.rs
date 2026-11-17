@@ -3,6 +3,8 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{Receiver, Sender, channel};
 
+const MAX_FRAME_BYTES: usize = 64 * 1024 * 1024;
+
 pub enum RpcMsg {
     Response {
         id: u64,
@@ -92,6 +94,9 @@ impl LspClient {
                     }
                 }
                 let Some(n) = len else { continue };
+                if n > MAX_FRAME_BYTES {
+                    return;
+                }
                 let mut buf = vec![0u8; n];
                 if reader.read_exact(&mut buf).is_err() {
                     return;

@@ -65,6 +65,7 @@ pub struct LspManager {
     open: HashMap<PathBuf, i32>,
     pending_open: Vec<PathBuf>,
     pub waiting: Wait,
+    pub waiting_id: Option<u64>,
     pub hover: Option<String>,
     pub diags: HashMap<PathBuf, Vec<Diag>>,
     pub completion: Option<CompletionState>,
@@ -118,6 +119,7 @@ impl LspManager {
             phase: Phase::Idle,
             pending_open: Vec::new(),
             waiting: Wait::None,
+            waiting_id: None,
             hover: None,
             diags: HashMap::new(),
             completion: None,
@@ -180,6 +182,7 @@ impl LspManager {
         self.open.clear();
         self.pending_open.clear();
         self.waiting = Wait::None;
+        self.waiting_id = None;
         self.hover = None;
         self.completion = None;
     }
@@ -255,9 +258,10 @@ impl LspManager {
             return;
         };
         self.hover = None;
-        self.waiting = Wait::Hover;
         if let Some(c) = self.client.as_mut() {
-            c.request("textDocument/hover", params);
+            let id = c.request("textDocument/hover", params);
+            self.waiting = Wait::Hover;
+            self.waiting_id = Some(id);
         }
     }
 
@@ -268,9 +272,10 @@ impl LspManager {
         let Some(params) = Self::doc_json(path, p) else {
             return;
         };
-        self.waiting = Wait::Goto;
         if let Some(c) = self.client.as_mut() {
-            c.request("textDocument/definition", params);
+            let id = c.request("textDocument/definition", params);
+            self.waiting = Wait::Goto;
+            self.waiting_id = Some(id);
         }
     }
 
@@ -284,7 +289,6 @@ impl LspManager {
         };
         self.completion_seq += 1;
         let seq = self.completion_seq;
-        self.waiting = Wait::Completion;
         let prefix = ident_prefix(text, p.line, p.col);
         self.completion = Some(CompletionState {
             items: Vec::new(),
@@ -295,7 +299,9 @@ impl LspManager {
             prefix,
         });
         if let Some(c) = self.client.as_mut() {
-            c.request("textDocument/completion", params);
+            let id = c.request("textDocument/completion", params);
+            self.waiting = Wait::Completion;
+            self.waiting_id = Some(id);
         }
     }
 
@@ -376,8 +382,12 @@ impl LspManager {
                     }
                 }
                 RpcMsg::Response { id, result, .. } => {
-                    if self.waiting == Wait::None {
-                        if id == 1 && self.phase == Phase::Starting {
+                    if self.waiting_id != Some(id) {
+                        if self.waiting == Wait::None
+                            && self.waiting_id.is_none()
+                            && id == 1
+                            && self.phase == Phase::Starting
+                        {
                             if let Some(c) = &self.client {
                                 c.notify("initialized", json!({}));
                             }
@@ -389,6 +399,7 @@ impl LspManager {
                         }
                         continue;
                     }
+                    self.waiting_id = None;
                     match self.waiting {
                         Wait::Hover => {
                             self.waiting = Wait::None;

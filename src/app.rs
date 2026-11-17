@@ -198,6 +198,12 @@ impl Editor {
     }
 
     pub fn scroll_to_cursor(&mut self, rows: usize) {
+        let last = self.buf().rope.len_lines().saturating_sub(1);
+        if self.buf().view_top > last {
+            let b = self.buf_mut();
+            b.view_top = last;
+            b.view_sub = 0;
+        }
         if rows == 0 {
             return;
         }

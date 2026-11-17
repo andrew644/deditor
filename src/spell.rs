@@ -69,7 +69,10 @@ pub fn run_hunspell(text: &str, dict: &str) -> Vec<String> {
         Err(_) => return Vec::new(),
     };
     if let Some(mut si) = child.stdin.take() {
-        let _ = si.write_all(text.as_bytes());
+        let text = text.to_string();
+        std::thread::spawn(move || {
+            let _ = si.write_all(text.as_bytes());
+        });
     }
     let mut out = String::new();
     if let Some(mut so) = child.stdout.take() {
@@ -77,9 +80,10 @@ pub fn run_hunspell(text: &str, dict: &str) -> Vec<String> {
     }
     let _ = child.wait();
     let mut words: Vec<String> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     for line in out.lines() {
         let w = line.split('/').next().unwrap_or("").trim();
-        if !w.is_empty() && !words.iter().any(|s| s == w) {
+        if !w.is_empty() && seen.insert(w.to_string()) {
             words.push(w.to_string());
         }
     }

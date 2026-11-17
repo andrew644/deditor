@@ -44,7 +44,7 @@ pub fn set(text: &str) -> crate::Result<()> {
     }
     #[cfg(unix)]
     {
-        wl_copy(text)
+        unix_copy(text)
     }
     #[cfg(not(unix))]
     {
@@ -63,7 +63,7 @@ pub fn get() -> crate::Result<String> {
     }
     #[cfg(unix)]
     {
-        wl_paste()
+        unix_paste()
     }
     #[cfg(not(unix))]
     {
@@ -88,10 +88,12 @@ fn copy_via_command(bin: &str, args: &[&str], text: &str) -> crate::Result<()> {
         .stdin
         .take()
         .ok_or_else(|| format!("{bin}: no stdin"))?;
-    let written = stdin.write_all(text.as_bytes());
-    drop(stdin);
-    written.map_err(|e| format!("{bin}: {e}"))?;
+    let text = text.to_string();
+    let writer = std::thread::spawn(move || {
+        let _ = stdin.write_all(text.as_bytes());
+    });
     let status = child.wait().map_err(|e| format!("{bin}: {e}"))?;
+    let _ = writer.join();
     if status.success() {
         Ok(())
     } else {
@@ -148,19 +150,57 @@ fn normalize_win(raw: String) -> String {
 }
 
 #[cfg(unix)]
-fn wl_copy(text: &str) -> crate::Result<()> {
-    if !wayland() {
-        return Err("no Wayland display".into());
+fn unix_copy(text: &str) -> crate::Result<()> {
+    let mut spawned = false;
+    for (bin, args) in copy_candidates() {
+        match copy_via_command(bin, args, text) {
+            Ok(()) => return Ok(()),
+            Err(_) => spawned |= std::path::Path::new(bin).exists() || which(bin),
+        }
     }
-    copy_via_command("wl-copy", &[], text)
+    if spawned {
+        Err("clipboard command failed".into())
+    } else {
+        Ok(())
+    }
 }
 
 #[cfg(unix)]
-fn wl_paste() -> crate::Result<String> {
-    if !wayland() {
-        return Err("no Wayland display".into());
+fn unix_paste() -> crate::Result<String> {
+    for (bin, args) in paste_candidates() {
+        if let Ok(text) = paste_via_command(bin, args) {
+            return Ok(text);
+        }
     }
-    paste_via_command("wl-paste", &["-n"])
+    Err("no clipboard tool found".into())
+}
+
+#[cfg(unix)]
+fn copy_candidates() -> Vec<(&'static str, &'static [&'static str])> {
+    let mut cands = Vec::new();
+    if wayland() {
+        cands.push(("wl-copy", &[][..]));
+    }
+    cands.push(("xclip", &["-selection", "clipboard"][..]));
+    cands.push(("xsel", &["--clipboard", "--input"][..]));
+    cands
+}
+
+#[cfg(unix)]
+fn paste_candidates() -> Vec<(&'static str, &'static [&'static str])> {
+    let mut cands = Vec::new();
+    if wayland() {
+        cands.push(("wl-paste", &["-n"][..]));
+    }
+    cands.push(("xclip", &["-selection", "clipboard", "-o"][..]));
+    cands.push(("xsel", &["--clipboard", "--output"][..]));
+    cands
+}
+
+#[cfg(unix)]
+fn which(bin: &str) -> bool {
+    std::env::var_os("PATH")
+        .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(bin).is_file()))
 }
 
 #[cfg(all(test, unix))]

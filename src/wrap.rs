@@ -214,6 +214,12 @@ impl Wrap {
         view_sub: usize,
         pos: Pos,
     ) -> Option<usize> {
+        let last = rope.len_lines().saturating_sub(1);
+        let view_top = view_top.min(last);
+        let pos = Pos {
+            line: pos.line.min(last),
+            col: pos.col,
+        };
         if pos.line < view_top {
             return None;
         }

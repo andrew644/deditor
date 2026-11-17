@@ -305,11 +305,7 @@ impl ApplicationHandler for App {
                 if screen_row < 0 {
                     return;
                 }
-                let gutter = if ed.config.line_numbers {
-                    ed.buf().rope.len_lines().max(1).to_string().len() + 2
-                } else {
-                    0
-                };
+                let gutter = render::gutter_cols(ed) as usize;
                 let xcell = ((mx / cw) as usize).saturating_sub(gutter);
                 let pos = ed.pos_at_cell(screen_row as usize, xcell);
                 ed.buf_mut().cursor = pos;
