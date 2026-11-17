@@ -42,7 +42,14 @@ pub fn set(text: &str) -> crate::Result<()> {
         clip.store(text);
         return Ok(());
     }
-    wl_copy(text)
+    #[cfg(unix)]
+    {
+        wl_copy(text)
+    }
+    #[cfg(not(unix))]
+    {
+        win_set(text)
+    }
 }
 
 pub fn get() -> crate::Result<String> {
@@ -52,46 +59,103 @@ pub fn get() -> crate::Result<String> {
     {
         return clip.load().map_err(|e| format!("wayland clipboard: {e}").into());
     }
-    wl_paste()
+    #[cfg(unix)]
+    {
+        wl_paste()
+    }
+    #[cfg(not(unix))]
+    {
+        win_get()
+    }
 }
 
+#[cfg(unix)]
 fn wayland() -> bool {
     std::env::var_os("WAYLAND_DISPLAY").is_some()
 }
 
+fn copy_via_command(bin: &str, args: &[&str], text: &str) -> crate::Result<()> {
+    let mut child = Command::new(bin)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("{bin}: {e}"))?;
+    let mut stdin = child.stdin.take().ok_or_else(|| format!("{bin}: no stdin"))?;
+    let written = stdin.write_all(text.as_bytes());
+    drop(stdin);
+    written.map_err(|e| format!("{bin}: {e}"))?;
+    let status = child.wait().map_err(|e| format!("{bin}: {e}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("{bin}: failed to set the clipboard").into())
+    }
+}
+
+fn paste_via_command(bin: &str, args: &[&str]) -> crate::Result<String> {
+    let out = Command::new(bin)
+        .args(args)
+        .output()
+        .map_err(|e| format!("{bin}: {e}"))?;
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr);
+        return Err(format!("{bin}: {}", err.trim()).into());
+    }
+    String::from_utf8(out.stdout).map_err(|_| format!("{bin}: clipboard is not text").into())
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+fn win_set(text: &str) -> crate::Result<()> {
+    copy_via_command(
+        "powershell.exe",
+        &[
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "[Console]::InputEncoding=[Text.Encoding]::UTF8; Set-Clipboard -Value ([Console]::In.ReadToEnd())",
+        ],
+        text,
+    )
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+fn win_get() -> crate::Result<String> {
+    let raw = paste_via_command(
+        "powershell.exe",
+        &[
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "[Console]::OutputEncoding=[Text.Encoding]::UTF8; Get-Clipboard -Raw",
+        ],
+    )?;
+    Ok(normalize_win(raw))
+}
+
+fn normalize_win(raw: String) -> String {
+    let mut text = raw.replace("\r\n", "\n");
+    if text.ends_with('\n') {
+        text.pop();
+    }
+    text
+}
+
+#[cfg(unix)]
 fn wl_copy(text: &str) -> crate::Result<()> {
     if !wayland() {
         return Err("no Wayland display".into());
     }
-    let mut child = Command::new("wl-copy")
-        .stdin(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("wl-copy: {e}"))?;
-    let mut stdin = child.stdin.take().ok_or("wl-copy: no stdin")?;
-    let written = stdin.write_all(text.as_bytes());
-    drop(stdin);
-    written.map_err(|e| format!("wl-copy: {e}"))?;
-    let status = child.wait().map_err(|e| format!("wl-copy: {e}"))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err("wl-copy: failed to own the clipboard".into())
-    }
+    copy_via_command("wl-copy", &[], text)
 }
 
+#[cfg(unix)]
 fn wl_paste() -> crate::Result<String> {
     if !wayland() {
         return Err("no Wayland display".into());
     }
-    let out = Command::new("wl-paste")
-        .arg("-n")
-        .output()
-        .map_err(|e| format!("wl-paste: {e}"))?;
-    if !out.status.success() {
-        let err = String::from_utf8_lossy(&out.stderr);
-        return Err(format!("wl-paste: {}", err.trim()).into());
-    }
-    String::from_utf8(out.stdout).map_err(|_| "wl-paste: clipboard is not text".into())
+    paste_via_command("wl-paste", &["-n"])
 }
 
 #[cfg(all(test, unix))]
@@ -168,6 +232,37 @@ mod e2e_tests {
         let (pasted, loaded) = h.result.expect("harness never ran");
         assert_eq!(pasted, "smithay store works");
         assert_eq!(loaded, "external copy");
+    }
+}
+
+#[cfg(test)]
+mod command_tests {
+    use super::*;
+
+    #[test]
+    fn normalize_win_converts_crlf_and_one_trailing_newline() {
+        assert_eq!(normalize_win("abc\r\n".into()), "abc");
+        assert_eq!(normalize_win("abc\r\n\r\n".into()), "abc\n");
+        assert_eq!(normalize_win("a\r\nb\n".into()), "a\nb");
+        assert_eq!(normalize_win(String::new()), "");
+        assert_eq!(normalize_win("héllo".into()), "héllo");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn command_helpers_round_trip_text_through_stdin_and_stdout() {
+        let f = std::env::temp_dir().join(format!("deditor_clip_{}", std::process::id()));
+        let write = format!("cat > {}", f.display());
+        let read = format!("cat {}", f.display());
+        copy_via_command("sh", &["-c", &write], "one\ntwo\n").unwrap();
+        assert_eq!(paste_via_command("sh", &["-c", &read]).unwrap(), "one\ntwo\n");
+        let err = copy_via_command("false", &[], "x").unwrap_err().to_string();
+        assert!(err.starts_with("false:"));
+        let err = paste_via_command("sh", &["-c", "echo bad 1>&2; exit 3"])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("bad"));
+        std::fs::remove_file(&f).ok();
     }
 }
 
