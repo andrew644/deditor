@@ -860,7 +860,7 @@ mod tests {
         let mut fonts = FontSystem::new();
         let name = "deditor-no-such-family".to_string();
         let family = grid_family(&fonts, &name);
-        let cell = measure_cell(&mut fonts, family.clone(), 14.0);
+        let cell = measure_cell(&mut fonts, family, 14.0);
         let xs = glyph_xs(&mut fonts, family, "abcdefghijklmnopqrstuvwxyz");
         assert!(xs.len() > 20);
         for (i, pair) in xs.windows(2).enumerate() {
