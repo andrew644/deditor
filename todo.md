@@ -1,5 +1,4 @@
 # TODO
-- v selection displays off by one on the right. Selection is correct though.
 - Add box select like nvim with ctrl-v
 - ctrl-p for already opened buffer shoudn't open new tab
 - lsp stuff should only run in programming files. For now, just do rs, c, cpp, h, hpp, odin, java, cs, js, ts

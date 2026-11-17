@@ -1,5 +1,6 @@
 pub mod rects;
 
+use crate::buffer::Pos;
 use cosmic_text::{Attrs, Buffer, Family, FontSystem, Metrics, Shaping, SwashCache};
 use glyphon::{Cache, TextAtlas, TextRenderer, Viewport};
 use std::sync::Arc;
@@ -357,32 +358,12 @@ pub fn draw_content(
             if line >= buf.rope.len_lines() || scr.start >= scr.end {
                 continue;
             }
-            if line < sa.line || line > sb.line {
-                continue;
-            }
             let raw = crate::buffer::line_text(&buf.rope, line);
-            let (from, to) = if lw {
-                let last = if sb.col == 0 {
-                    sb.line.saturating_sub(1)
-                } else {
-                    sb.line
-                };
-                if line > last {
-                    continue;
-                }
-                (scr.start, usize::MAX)
-            } else if sa.line == sb.line {
-                (sa.col, sb.col + 1)
-            } else if line == sa.line {
-                (sa.col, usize::MAX)
-            } else if line == sb.line {
-                if sb.col == 0 {
-                    continue;
-                }
-                (scr.start, sb.col)
-            } else {
-                (scr.start, usize::MAX)
+            let (from, to) = match sel_row_span(sa, sb, lw, line) {
+                Some(f) => f,
+                None => continue,
             };
+            let from = from.unwrap_or(scr.start);
             let a = from.max(scr.start);
             if a >= scr.end {
                 continue;
@@ -858,6 +839,42 @@ fn fit(s: &str, room: usize) -> String {
     s.chars().take(room).collect()
 }
 
+/// Half-open cell span `[from, to)` the visual selection covers on `line`.
+/// `sa` and `sb` are the inclusive anchor and exclusive end from
+/// `Editor::sel_range`. `None` for from means the row's first cell, and
+/// `usize::MAX` for to means the end of the screen row.
+fn sel_row_span(
+    sa: Pos,
+    sb: Pos,
+    lw: bool,
+    line: usize,
+) -> Option<(Option<usize>, usize)> {
+    if lw {
+        let last = if sb.col == 0 {
+            sb.line.saturating_sub(1)
+        } else {
+            sb.line
+        };
+        return if line > last { None } else { Some((None, usize::MAX)) };
+    }
+    if line < sa.line || line > sb.line {
+        return None;
+    }
+    if sa.line == sb.line {
+        Some((Some(sa.col), sb.col))
+    } else if line == sa.line {
+        Some((Some(sa.col), usize::MAX))
+    } else if line == sb.line {
+        if sb.col == 0 {
+            None
+        } else {
+            Some((None, sb.col))
+        }
+    } else {
+        Some((None, usize::MAX))
+    }
+}
+
 fn pad_line(s: &str, cols: usize) -> String {
     let trimmed: String = s.chars().take(cols).collect();
     format!("{trimmed:<cols$}")
@@ -940,5 +957,18 @@ mod tests {
         assert_eq!(pad_line("0123456789", 6), "012345");
         assert_eq!(pad_line("ab", 5), "ab   ");
         assert_eq!(pad_line("", 3), "   ");
+    }
+
+    #[test]
+    fn visual_span_covers_exactly_the_inclusive_selection() {
+        let p = |line, col| Pos { line, col };
+        assert_eq!(sel_row_span(p(0, 0), p(0, 3), false, 0), Some((Some(0), 3)));
+        assert_eq!(sel_row_span(p(0, 2), p(1, 4), false, 0), Some((Some(2), usize::MAX)));
+        assert_eq!(sel_row_span(p(0, 2), p(1, 4), false, 1), Some((None, 4)));
+        assert_eq!(sel_row_span(p(0, 2), p(2, 4), false, 1), Some((None, usize::MAX)));
+        assert_eq!(sel_row_span(p(0, 2), p(2, 0), false, 2), None);
+        assert_eq!(sel_row_span(p(0, 0), p(2, 0), true, 1), Some((None, usize::MAX)));
+        assert_eq!(sel_row_span(p(0, 0), p(2, 0), true, 2), None);
+        assert_eq!(sel_row_span(p(0, 0), p(1, 3), true, 1), Some((None, usize::MAX)));
     }
 }
