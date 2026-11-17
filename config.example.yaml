@@ -9,6 +9,7 @@ font:
 tab_width: 4
 line_numbers: true
 clipboard: true
+show_whitespace: false
 
 theme:
   fg: "#d8d8da"

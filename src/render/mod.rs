@@ -439,7 +439,12 @@ pub fn draw_content(
                 }
             }
             let raw = crate::buffer::line_text(&buf.rope, row.line);
-            body_s.push_str(&wrap.text(&raw, row.start, row.end));
+            body_s.push_str(&wrap.text(
+                &raw,
+                row.start,
+                row.end,
+                ed.config.show_whitespace,
+            ));
         }
         if r + 1 < rows.len() {
             gutter_s.push('\n');

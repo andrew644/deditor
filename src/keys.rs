@@ -18,6 +18,14 @@ fn key_down(ed: &mut Editor, key: &Key, mods: ModifiersState) {
         return;
     }
     ed.context_menu = None;
+    if *key == Key::Named(NamedKey::F2) {
+        ed.config.show_whitespace = !ed.config.show_whitespace;
+        ed.set_status(
+            format!("show whitespace: {}", ed.config.show_whitespace),
+            false,
+        );
+        return;
+    }
     if ed.panel != crate::fuzzy::Panel::None {
         panel_key(ed, key, mods);
         return;
@@ -1048,5 +1056,20 @@ mod tests {
         assert!(ed.context_menu.is_some());
         type_keys(&mut ed, &[Key::Character("j".into())]);
         assert!(ed.context_menu.is_none());
+    }
+
+    #[test]
+    fn f2_toggles_whitespace_visibility_in_every_mode() {
+        let mut ed = Editor::new(None);
+        type_keys(&mut ed, &[Key::Named(NamedKey::F2)]);
+        assert!(ed.config.show_whitespace);
+        assert_eq!(ed.status.as_deref(), Some("show whitespace: true"));
+        ed.mode = Mode::Insert;
+        type_keys(&mut ed, &[Key::Named(NamedKey::F2)]);
+        assert!(!ed.config.show_whitespace);
+        assert!(ed.buf().rope.to_string().is_empty());
+        ed.mode = Mode::Normal;
+        type_keys(&mut ed, &[Key::Named(NamedKey::F2)]);
+        assert!(ed.config.show_whitespace);
     }
 }

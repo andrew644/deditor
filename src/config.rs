@@ -74,6 +74,7 @@ pub struct Config {
     pub tab_width: u32,
     pub line_numbers: bool,
     pub clipboard: bool,
+    pub show_whitespace: bool,
 }
 
 impl Default for Config {
@@ -84,6 +85,7 @@ impl Default for Config {
             tab_width: 4,
             line_numbers: true,
             clipboard: true,
+            show_whitespace: false,
         }
     }
 }
@@ -200,12 +202,13 @@ pub const PALETTE: [&str; 12] = [
     "#f7768e", "#e0af68", "#26262e", "#3f4a5f",
 ];
 
-pub const SETTINGS: [&str; 19] = [
+pub const SETTINGS: [&str; 20] = [
     "font.family",
     "font.size",
     "tab_width",
     "line_numbers",
     "clipboard",
+    "show_whitespace",
     "theme.fg",
     "theme.bg",
     "theme.gutter_fg",
@@ -276,6 +279,7 @@ pub fn setting_value(cfg: &Config, key: &str) -> String {
         "tab_width" => format!("{}", cfg.tab_width),
         "line_numbers" => format!("{}", cfg.line_numbers),
         "clipboard" => format!("{}", cfg.clipboard),
+        "show_whitespace" => format!("{}", cfg.show_whitespace),
         k if k.starts_with("theme.") => {
             theme_color(&cfg.theme, &k["theme.".len()..]).unwrap_or("?").to_string()
         }
@@ -293,6 +297,7 @@ pub fn setting_activate(cfg: &mut Config, key: &str) {
         "tab_width" => cfg.tab_width = next_in(&TAB_WIDTHS, &cfg.tab_width),
         "line_numbers" => cfg.line_numbers = !cfg.line_numbers,
         "clipboard" => cfg.clipboard = !cfg.clipboard,
+        "show_whitespace" => cfg.show_whitespace = !cfg.show_whitespace,
         k if k.starts_with("theme.") => {
             let name = &k["theme.".len()..];
             let cur = theme_color(&cfg.theme, name).map(|s| s.to_string());
@@ -387,6 +392,17 @@ mod tests {
         assert!(parse_hex(&c.theme.accent).is_some());
         assert_ne!(c.theme.accent, Theme::default().accent);
         assert_eq!(setting_value(&c, "tab_width"), "4");
+    }
+
+    #[test]
+    fn show_whitespace_round_trips() {
+        let mut c = Config::default();
+        assert!(!c.show_whitespace);
+        assert_eq!(setting_value(&c, "show_whitespace"), "false");
+        assert!(SETTINGS.contains(&"show_whitespace"));
+        setting_activate(&mut c, "show_whitespace");
+        assert!(c.show_whitespace);
+        assert_eq!(setting_value(&c, "show_whitespace"), "true");
     }
 
     #[test]

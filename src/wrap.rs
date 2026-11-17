@@ -90,7 +90,9 @@ impl Wrap {
     }
 
     /// The text of char range `[start, end)` with tabs expanded for its row.
-    pub fn text(&self, line: &str, start: usize, end: usize) -> String {
+    /// With `vis`, blanks render as visible markers: spaces become middots
+    /// and tabs an guillemet followed by middots, each one cell wide.
+    pub fn text(&self, line: &str, start: usize, end: usize, vis: bool) -> String {
         let body = self.body(line);
         let mut out = String::new();
         let mut x = 0usize;
@@ -103,12 +105,19 @@ impl Wrap {
             }
             if c == '\t' {
                 let w = self.tab_width - (x % self.tab_width);
-                for _ in 0..w {
-                    out.push(' ');
+                if vis {
+                    out.push('\u{bb}');
+                    for _ in 1..w {
+                        out.push('\u{b7}');
+                    }
+                } else {
+                    for _ in 0..w {
+                        out.push(' ');
+                    }
                 }
                 x += w;
             } else {
-                out.push(c);
+                out.push(if vis && c == ' ' { '\u{b7}' } else { c });
                 x += 1;
             }
         }
@@ -327,9 +336,21 @@ mod tests {
     fn tabs_stay_whole_and_reanchor_per_row() {
         let w = Wrap::new(4, 4);
         assert_eq!(w.rows("\tab"), vec![(0, 1), (1, 3)]);
-        assert_eq!(w.text("\tab", 1, 3), "ab");
+        assert_eq!(w.text("\tab", 1, 3, false), "ab");
         assert_eq!(w.rows("\t a"), vec![(0, 1), (1, 3)]);
-        assert_eq!(w.text("\t a", 1, 3), " a");
+        assert_eq!(w.text("\t a", 1, 3, false), " a");
+    }
+
+    #[test]
+    fn vis_markers_stay_one_cell_wide() {
+        let w = Wrap::new(10, 4);
+        assert_eq!(w.text("a b", 0, 3, true), "a\u{b7}b");
+        assert_eq!(w.text("\tab", 0, 3, true), "\u{bb}\u{b7}\u{b7}\u{b7}ab");
+        assert_eq!(w.text("a\tb", 0, 3, true), "a\u{bb}\u{b7}\u{b7}b");
+        assert_eq!(
+            w.text("\tab", 0, 3, true).chars().count(),
+            w.text("\tab", 0, 3, false).chars().count()
+        );
     }
 
     #[test]
