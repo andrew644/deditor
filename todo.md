@@ -1,5 +1,4 @@
 # TODO
-- lsp stuff should only run in programming files. For now, just do rs, c, cpp, h, hpp, odin, java, cs, js, ts
 - Windows - clipboard copy/paste not working
 - Windows - When the .exe is double clicked, it also spawns a terminal window
 - Windows - The config directory should be %LOCALAPPDATA%\deditor\

@@ -22,7 +22,6 @@ enum Phase {
     Idle,
     Starting,
     Ready,
-    Disabled,
 }
 
 /// Manager-side result of a poll, applied by the Editor.
@@ -60,6 +59,8 @@ pub struct CompletionState {
 
 pub struct LspManager {
     client: Option<LspClient>,
+    server: Option<&'static str>,
+    failed: Vec<&'static str>,
     phase: Phase,
     open: HashMap<PathBuf, i32>,
     pending_open: Vec<PathBuf>,
@@ -84,6 +85,25 @@ pub fn file_url(p: &Path) -> Option<lt::Url> {
 pub fn language_for(p: &Path) -> Option<&'static str> {
     match p.extension().and_then(|e| e.to_str()) {
         Some("rs") => Some("rust"),
+        Some("c") | Some("h") => Some("c"),
+        Some("cpp") | Some("hpp") => Some("cpp"),
+        Some("odin") => Some("odin"),
+        Some("java") => Some("java"),
+        Some("cs") => Some("csharp"),
+        Some("js") => Some("javascript"),
+        Some("ts") => Some("typescript"),
+        _ => None,
+    }
+}
+
+pub fn server_for(p: &Path) -> Option<&'static str> {
+    match language_for(p)? {
+        "rust" => Some("rust-analyzer"),
+        "c" | "cpp" => Some("clangd"),
+        "odin" => Some("ols"),
+        "java" => Some("jdtls"),
+        "csharp" => Some("csharp-ls"),
+        "javascript" | "typescript" => Some("typescript-language-server"),
         _ => None,
     }
 }
@@ -92,8 +112,10 @@ impl LspManager {
     pub fn new() -> Self {
         Self {
             client: None,
-            phase: Phase::Idle,
+            server: None,
+            failed: Vec::new(),
             open: HashMap::new(),
+            phase: Phase::Idle,
             pending_open: Vec::new(),
             waiting: Wait::None,
             hover: None,
@@ -116,14 +138,18 @@ impl LspManager {
         })
     }
 
-    /// Ensure a server runs and `path` (if a supported file) is open.
+    /// Ensure the server for `path` runs and the doc is open.
     pub fn ensure(&mut self, path: Option<&PathBuf>) {
         let Some(path) = path else { return };
-        if language_for(path).is_none() || self.phase == Phase::Disabled {
+        let Some(cmd) = server_for(path) else {
+            return;
+        };
+        if self.failed.contains(&cmd) {
             return;
         }
-        if self.client.is_none() {
-            match LspClient::spawn("rust-analyzer", &[], &self.root.display().to_string()) {
+        if self.server != Some(cmd) {
+            self.reset();
+            match LspClient::spawn(cmd, &[], &self.root.display().to_string()) {
                 Ok(mut c) => {
                     c.request(
                         "initialize",
@@ -134,16 +160,28 @@ impl LspManager {
                         }),
                     );
                     self.client = Some(c);
+                    self.server = Some(cmd);
                     self.phase = Phase::Starting;
                 }
                 Err(e) => {
                     eprintln!("deditor: {e}");
-                    self.phase = Phase::Disabled;
+                    self.failed.push(cmd);
                     return;
                 }
             }
         }
         self.open_doc(path);
+    }
+
+    fn reset(&mut self) {
+        self.client = None;
+        self.server = None;
+        self.phase = Phase::Idle;
+        self.open.clear();
+        self.pending_open.clear();
+        self.waiting = Wait::None;
+        self.hover = None;
+        self.completion = None;
     }
 
     fn open_doc(&mut self, path: &Path) {
@@ -618,8 +656,41 @@ mod tests {
     #[test]
     fn language_detect() {
         assert_eq!(language_for(Path::new("x.rs")), Some("rust"));
+        assert_eq!(language_for(Path::new("x.c")), Some("c"));
+        assert_eq!(language_for(Path::new("x.h")), Some("c"));
+        assert_eq!(language_for(Path::new("x.cpp")), Some("cpp"));
+        assert_eq!(language_for(Path::new("x.hpp")), Some("cpp"));
+        assert_eq!(language_for(Path::new("x.odin")), Some("odin"));
+        assert_eq!(language_for(Path::new("x.java")), Some("java"));
+        assert_eq!(language_for(Path::new("x.cs")), Some("csharp"));
+        assert_eq!(language_for(Path::new("x.js")), Some("javascript"));
+        assert_eq!(language_for(Path::new("x.ts")), Some("typescript"));
         assert_eq!(language_for(Path::new("x.txt")), None);
+        assert_eq!(language_for(Path::new("x.md")), None);
         assert_eq!(language_for(Path::new("noext")), None);
+    }
+
+    #[test]
+    fn server_mapping() {
+        assert_eq!(server_for(Path::new("x.rs")), Some("rust-analyzer"));
+        assert_eq!(server_for(Path::new("x.h")), Some("clangd"));
+        assert_eq!(server_for(Path::new("x.cpp")), Some("clangd"));
+        assert_eq!(server_for(Path::new("x.odin")), Some("ols"));
+        assert_eq!(server_for(Path::new("x.java")), Some("jdtls"));
+        assert_eq!(server_for(Path::new("x.cs")), Some("csharp-ls"));
+        assert_eq!(server_for(Path::new("x.ts")), Some("typescript-language-server"));
+        assert_eq!(server_for(Path::new("x.md")), None);
+        assert_eq!(server_for(Path::new("x.yaml")), None);
+    }
+
+    #[test]
+    fn ensure_ignores_non_programming_files() {
+        let mut m = LspManager::new();
+        m.ensure(Some(&PathBuf::from("/tmp/notes.md")));
+        assert!(!m.active());
+        m.ensure(Some(&PathBuf::from("/tmp/notes.txt")));
+        m.ensure(None);
+        assert!(!m.active());
     }
 
     #[test]
