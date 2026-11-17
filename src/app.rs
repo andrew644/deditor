@@ -1193,11 +1193,11 @@ impl Editor {
         for ev in self.lsp.poll() {
             match ev {
                 crate::lsp::Ev::Goto { path, line, col } => {
-                    if !self.buffers.iter().any(|b| b.path.as_ref() == Some(&path)) {
-                        self.open_path(path.clone());
-                    }
-                    if let Some(i) =
-                        self.buffers.iter().position(|b| b.path.as_ref() == Some(&path))
+                    self.open_path(path.clone());
+                    if let Some(i) = self
+                        .buffers
+                        .iter()
+                        .position(|b| b.path.as_ref().is_some_and(|q| same_path(q, &path)))
                     {
                         self.activate(i);
                         self.buf_mut().cursor = Pos { line, col };
@@ -1360,6 +1360,15 @@ impl Editor {
     }
 
     pub fn open_path(&mut self, p: std::path::PathBuf) {
+        if let Some(i) = self
+            .buffers
+            .iter()
+            .position(|b| b.path.as_ref().is_some_and(|q| same_path(q, &p)))
+        {
+            self.activate(i);
+            self.ensure_lsp();
+            return;
+        }
         match Buffer::load(&p) {
             Ok(b) => {
                 let empty_cur = {
@@ -1383,7 +1392,11 @@ impl Editor {
     }
 
     pub fn edit_path_in_new_buffer(&mut self, p: std::path::PathBuf) {
-        if let Some(i) = self.buffers.iter().position(|b| b.path.as_ref() == Some(&p)) {
+        if let Some(i) = self
+            .buffers
+            .iter()
+            .position(|b| b.path.as_ref().is_some_and(|q| same_path(q, &p)))
+        {
             let name = self.buffers[i].display_name();
             if i != self.active {
                 self.activate(i);
@@ -1419,6 +1432,14 @@ fn shrink_tilde(p: &str) -> String {
             return format!("{}/{rest}", home.to_string_lossy());
         }
     p.to_string()
+}
+
+fn same_path(a: &std::path::Path, b: &std::path::Path) -> bool {
+    a == b
+        || matches!(
+            (std::fs::canonicalize(a), std::fs::canonicalize(b)),
+            (Ok(x), Ok(y)) if x == y
+        )
 }
 
 fn files_root(dir: &str) -> std::path::PathBuf {
@@ -2203,6 +2224,49 @@ mod tests {
         assert_eq!(ed.buf().rope.to_string(), "abc\n\n");
         assert_eq!(ed.buf().cursor, Pos { line: 2, col: 0 });
         assert_eq!(ed.mode, Mode::Insert);
+    }
+
+    #[test]
+    fn open_path_reuses_the_buffer_already_open_for_that_file() {
+        let dir = std::env::temp_dir().join("deditor_open_dedup");
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("dup.txt");
+        std::fs::write(&f, "dup text\n").unwrap();
+        let mut ed = ed_with("keep\n");
+        ed.open_path(f.clone());
+        assert_eq!(ed.buffers.len(), 2);
+        assert_eq!(ed.active, 1);
+        assert_eq!(text(&ed), "dup text\n");
+        ed.open_path(f.clone());
+        assert_eq!(ed.buffers.len(), 2);
+        assert_eq!(ed.active, 1);
+        ed.open_path(dir.join(".").join("dup.txt"));
+        assert_eq!(ed.buffers.len(), 2);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn files_panel_reopens_existing_buffer_instead_of_a_new_tab() {
+        let _cwd = CWD_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let dir = std::env::temp_dir().join(format!("deditor_panel_dup_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("p.txt"), "panel text\n").unwrap();
+        let saved = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+        let mut ed = ed_with("keep\n");
+        for _ in 0..2 {
+            ed.panel = crate::fuzzy::Panel::Files;
+            ed.panel_query = String::new();
+            ed.panel_items = vec!["p.txt".to_string()];
+            ed.panel_order = vec![0];
+            ed.panel_cursor = 0;
+            ed.panel_accept();
+        }
+        assert_eq!(ed.buffers.len(), 2);
+        assert_eq!(ed.active, 1);
+        assert_eq!(text(&ed), "panel text\n");
+        std::env::set_current_dir(&saved).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
     }
 
 }
