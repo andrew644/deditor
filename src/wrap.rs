@@ -138,7 +138,10 @@ impl Wrap {
         let mut sub = view_sub;
         let mut left = delta;
         while left > 0 && top < last {
-            let avail = self.row_count(&line_text(rope, top)) - sub;
+            let avail = self
+                .row_count(&line_text(rope, top))
+                .saturating_sub(sub)
+                .max(1);
             let n = left as usize;
             if n < avail {
                 sub += n;
@@ -438,5 +441,12 @@ mod tests {
         assert_eq!(w.anchor(&r, 2), (1, 1));
         assert_eq!(w.anchor(&r, 4), (3, 0));
         assert_eq!(w.anchor(&r, 99), (3, 0));
+    }
+
+    #[test]
+    fn scroll_survives_a_stale_sub() {
+        let r = rope("short\nnext line\n");
+        let w = Wrap::new(40, 4);
+        assert_eq!(w.scroll(&r, 0, 9, 1), (1, 0));
     }
 }
