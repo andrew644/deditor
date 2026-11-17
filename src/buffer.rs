@@ -11,7 +11,7 @@ pub struct Pos {
 pub enum Change {
     Insert { at: Pos, text: String },
     Delete { at: Pos, text: String },
-    Replace { edits: Vec<(Pos, String, String)> },
+    Replace { edits: Vec<(usize, String, String)> },
 }
 
 pub struct UndoEntry {
@@ -223,10 +223,8 @@ impl Buffer {
 
     pub fn insert_text(&mut self, text: &str, coalesce: bool) {
         let at = self.cursor;
-        let before = self.rope.len_chars();
         let off = self.offset_of(at);
         self.rope.insert(off, text);
-        let _ = before;
         self.cursor = self.pos_of(off + text.chars().count());
         self.after_edit();
         if coalesce
@@ -296,10 +294,10 @@ impl Buffer {
             }
             Change::Replace { edits } => {
                 let prefixes = replace_prefix_shifts(edits);
-                for ((at, old, new), pre) in edits.iter().zip(&prefixes).rev() {
-                    let off = shifted_offset(self, *at, *pre);
-                    cut(&mut self.rope, off, new.chars().count());
-                    self.rope.insert(off, old);
+                for ((off, old, new), pre) in edits.iter().zip(&prefixes).rev() {
+                    let o = (*off as i64 + *pre).clamp(0, self.rope.len_chars() as i64) as usize;
+                    cut(&mut self.rope, o, new.chars().count());
+                    self.rope.insert(o, old);
                 }
             }
         }
@@ -324,10 +322,9 @@ impl Buffer {
                 cut(&mut self.rope, off, text.chars().count());
             }
             Change::Replace { edits } => {
-                for (at, old, new) in edits.iter().rev() {
-                    let off = self.offset_of(*at);
-                    cut(&mut self.rope, off, old.chars().count());
-                    self.rope.insert(off, new);
+                for (off, old, new) in edits.iter().rev() {
+                    cut(&mut self.rope, *off, old.chars().count());
+                    self.rope.insert(*off, new);
                 }
             }
         }
@@ -340,10 +337,13 @@ impl Buffer {
 
     pub fn replace_all(&mut self, edits: Vec<(Pos, String, String)>) {
         let cursor_before = self.cursor;
-        for (at, old, new) in edits.iter().rev() {
-            let off = self.offset_of(*at).min(self.rope.len_chars());
-            cut(&mut self.rope, off, old.chars().count());
-            self.rope.insert(off, new);
+        let edits: Vec<(usize, String, String)> = edits
+            .into_iter()
+            .map(|(at, old, new)| (self.offset_of(at).min(self.rope.len_chars()), old, new))
+            .collect();
+        for (off, old, new) in edits.iter().rev() {
+            cut(&mut self.rope, *off, old.chars().count());
+            self.rope.insert(*off, new);
         }
         self.clamp();
         let cursor_after = self.cursor;
@@ -361,23 +361,14 @@ fn cut(rope: &mut Rope, off: usize, count: usize) {
     rope.remove(off..(off + count).min(rope.len_chars()));
 }
 
-fn replace_prefix_shifts(edits: &[(Pos, String, String)]) -> Vec<i64> {
+fn replace_prefix_shifts(edits: &[(usize, String, String)]) -> Vec<i64> {
     let mut prefixes = Vec::with_capacity(edits.len());
     let mut acc: i64 = 0;
-    let mut prev_line = None;
-    for (at, old, new) in edits {
-        if prev_line != Some(at.line) {
-            acc = 0;
-            prev_line = Some(at.line);
-        }
+    for (_, old, new) in edits {
         prefixes.push(acc);
         acc += new.chars().count() as i64 - old.chars().count() as i64;
     }
     prefixes
-}
-
-fn shifted_offset(b: &Buffer, at: Pos, pre: i64) -> usize {
-    (b.offset_of(at) as i64 + pre).clamp(0, b.rope.len_chars() as i64) as usize
 }
 
 #[cfg(test)]
@@ -640,5 +631,21 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn undo_replace_across_lines_round_trips() {
+        let mut b = Buffer::empty();
+        b.insert_text("aaa\nbbb\n", false);
+        b.redo.clear();
+        b.replace_all(vec![
+            (Pos { line: 0, col: 2 }, "a".to_string(), "XY".to_string()),
+            (Pos { line: 1, col: 0 }, "b".to_string(), "Z".to_string()),
+        ]);
+        assert_eq!(b.rope.to_string(), "aaXY\nZbb\n");
+        b.undo();
+        assert_eq!(b.rope.to_string(), "aaa\nbbb\n");
+        b.redo_action();
+        assert_eq!(b.rope.to_string(), "aaXY\nZbb\n");
     }
 }

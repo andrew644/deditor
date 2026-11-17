@@ -20,6 +20,7 @@ pub enum Motion {
     BigGE,
     GG,
     G,
+    ToLine(usize),
     Fwd(char),
     Back(char),
     TillFwd(char),
@@ -112,6 +113,7 @@ pub fn apply(rope: &Rope, pos: Pos, m: Motion, count: u32, ctx: &Ctx) -> Pos {
         Motion::BigGE => (0..n).fold(pos, |p, _| ge_one(rope, p, true)),
         Motion::GG => clamp(rope, 0, pos.col),
         Motion::G => clamp(rope, last, pos.col),
+        Motion::ToLine(l) => clamp(rope, l, pos.col),
         Motion::Fwd(c) => find_fwd(rope, pos, c, n, false).unwrap_or(pos),
         Motion::TillFwd(c) => find_fwd(rope, pos, c, n, true).unwrap_or(pos),
         Motion::Back(c) => find_back(rope, pos, c, n).unwrap_or(pos),
@@ -132,92 +134,81 @@ pub fn apply(rope: &Rope, pos: Pos, m: Motion, count: u32, ctx: &Ctx) -> Pos {
 
 fn first_non_blank(rope: &Rope, line: usize) -> usize {
     line_text(rope, line)
-        .char_indices()
+        .chars()
+        .enumerate()
         .find(|(_, c)| !c.is_whitespace())
         .map(|(i, _)| i)
         .unwrap_or(0)
 }
 
+fn next_word_line(rope: &Rope, line: usize, last: usize) -> Pos {
+    for l in line + 1..=last {
+        let chars: Vec<char> = line_text(rope, l).chars().collect();
+        if let Some(col) = chars.iter().position(|c| !c.is_whitespace()) {
+            return Pos { line: l, col };
+        }
+    }
+    Pos { line: last, col: 0 }
+}
+
 fn w_one(rope: &Rope, p: Pos, big: bool) -> Pos {
     let last = rope.len_lines().saturating_sub(1);
-    let mut line = p.line;
+    let line = p.line;
     let mut col = p.col;
     let len = line_chars(rope, line);
     if col >= len {
         if line >= last {
             return Pos { line, col };
         }
-        return Pos {
-            line: line + 1,
-            col: 0,
-        };
+        return next_word_line(rope, line, last);
     }
-    loop {
-        let text = line_text(rope, line);
-        let chars: Vec<char> = text.chars().collect();
-        let len = chars.len();
-        if col >= len {
-            if line >= last {
-                return Pos { line, col: len };
-            }
-            line += 1;
-            col = 0;
-            continue;
-        }
-        if chars[col].is_whitespace() {
-            while col < len && chars[col].is_whitespace() {
-                col += 1;
-            }
-            if col >= len {
-                if line >= last {
-                    return Pos { line, col: len };
-                }
-                line += 1;
-                col = 0;
-                continue;
-            }
-            return Pos { line, col };
-        }
-        let start_kind = if big {
-            !chars[col].is_whitespace()
-        } else {
-            char_is_word(chars[col])
-        };
-        while col < len {
-            let c = chars[col];
-            let same = if big {
-                !c.is_whitespace()
-            } else if start_kind {
-                char_is_word(c)
-            } else {
-                !c.is_whitespace() && !char_is_word(c)
-            };
-            if !same {
-                break;
-            }
+    let text = line_text(rope, line);
+    let chars: Vec<char> = text.chars().collect();
+    let len = chars.len();
+    if chars[col].is_whitespace() {
+        while col < len && chars[col].is_whitespace() {
             col += 1;
         }
         if col >= len {
             if line >= last {
                 return Pos { line, col };
             }
-            return Pos {
-                line: line + 1,
-                col: 0,
-            };
+            return next_word_line(rope, line, last);
         }
-        while col < len && chars[col].is_whitespace() {
-            col += 1;
+        return Pos { line, col };
+    }
+    let start_kind = if big {
+        !chars[col].is_whitespace()
+    } else {
+        char_is_word(chars[col])
+    };
+    while col < len {
+        let c = chars[col];
+        let same = if big {
+            !c.is_whitespace()
+        } else if start_kind {
+            char_is_word(c)
+        } else {
+            !c.is_whitespace() && !char_is_word(c)
+        };
+        if !same {
+            break;
         }
-        if col < len {
-            return Pos { line, col };
-        }
+        col += 1;
+    }
+    if col >= len {
         if line >= last {
             return Pos { line, col };
         }
-        line += 1;
-        col = 0;
+        return next_word_line(rope, line, last);
     }
+    while col < len && chars[col].is_whitespace() {
+        col += 1;
+    }
+    if col < len {
+        return Pos { line, col };
+    }
+    next_word_line(rope, line, last)
 }
 
 fn b_one(rope: &Rope, p: Pos, big: bool) -> Pos {
@@ -262,8 +253,9 @@ fn b_one(rope: &Rope, p: Pos, big: bool) -> Pos {
         }
         line -= 1;
         col = line_chars(rope, line);
-        if col == 0 {
-            return Pos { line, col: 0 };
+        while col == 0 && line > 0 {
+            line -= 1;
+            col = line_chars(rope, line);
         }
     }
 }
@@ -664,5 +656,23 @@ mod tests {
         assert_eq!(apply(&r, at(0, 8), Motion::J, 1, &ctx), at(1, 0));
         assert_eq!(apply(&r, at(0, 8), Motion::LineDown, 1, &ctx), at(1, 1));
         assert_eq!(apply(&r, at(1, 0), Motion::LineUp, 1, &ctx), at(0, 0));
+    }
+
+    #[test]
+    fn w_skips_indent_after_newline() {
+        let r = rope("ab\n  cd");
+        assert_eq!(m(&r, at(0, 0), Motion::W), at(1, 2));
+    }
+
+    #[test]
+    fn w_skips_blank_lines() {
+        let r = rope("ab\n\n  cd");
+        assert_eq!(m(&r, at(0, 0), Motion::W), at(2, 2));
+    }
+
+    #[test]
+    fn b_skips_blank_lines() {
+        let r = rope("hello\n\n\nworld");
+        assert_eq!(m(&r, at(3, 0), Motion::B), at(0, 0));
     }
 }

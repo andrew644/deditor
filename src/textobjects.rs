@@ -131,17 +131,24 @@ fn quote_obj(rope: &Rope, line: usize, col: usize, q: char, inner: bool) -> Opti
     if text.is_empty() {
         return None;
     }
-    let mut before = None;
-    for i in (0..=col.min(text.len().saturating_sub(1))).rev() {
-        if text[i] == q {
-            before = Some(i);
-            break;
-        }
-    }
-    let after = (col + 1..text.len()).find(|&j| text[j] == q);
-    let b = before?;
-    let a = after?;
     let base = rope.line_to_char(line);
+    if col < text.len() && text[col] == q {
+        if let Some(b) = (0..col).rev().find(|&i| text[i] == q) {
+            return Some(if inner {
+                (base + b + 1, base + col)
+            } else {
+                (base + b, base + col + 1)
+            });
+        }
+        let a = (col + 1..text.len()).find(|&j| text[j] == q)?;
+        return Some(if inner {
+            (base + col + 1, base + a)
+        } else {
+            (base + col, base + a + 1)
+        });
+    }
+    let b = (0..col).rev().find(|&i| text[i] == q)?;
+    let a = (col + 1..text.len()).find(|&j| text[j] == q)?;
     if inner {
         Some((base + b + 1, base + a))
     } else {

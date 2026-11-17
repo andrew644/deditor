@@ -229,7 +229,7 @@ fn normal_key(ed: &mut Editor, key: &Key, mods: ModifiersState) {
         Pending::G => {
             ed.pending = Pending::None;
             match k {
-                Some("g") => ed.run_motion(Motion::GG, count),
+                Some("g") => ed.run_motion(g_to_line(count, ed.count, true), 1),
                 Some("j") => ed.run_motion(Motion::J, count),
                 Some("k") => ed.run_motion(Motion::K, count),
                 Some("e") => ed.run_motion(Motion::GE, count),
@@ -243,7 +243,7 @@ fn normal_key(ed: &mut Editor, key: &Key, mods: ModifiersState) {
         Pending::OpG { op } => {
             ed.pending = Pending::None;
             if matches!(k, Some("g")) {
-                ed.operator_motion(op, Motion::GG, count);
+                ed.operator_motion(op, g_to_line(count, ed.count, true), count);
             }
             ed.count = 0;
             return;
@@ -322,7 +322,7 @@ fn normal_key(ed: &mut Editor, key: &Key, mods: ModifiersState) {
                     return;
                 }
                 Some("G") => {
-                    ed.operator_motion(op, Motion::G, count);
+                    ed.operator_motion(op, g_to_line(count, ed.count, false), count);
                 }
                 Some(s2) if s2 == op_char(op) => {
                     ed.operator_line(op);
@@ -358,7 +358,7 @@ fn normal_key(ed: &mut Editor, key: &Key, mods: ModifiersState) {
             let m = motion_of(k).unwrap();
             ed.run_motion(m, count);
         }
-        "G" => ed.run_motion(Motion::G, count),
+        "G" => ed.run_motion(g_to_line(count, ed.count, false), 1),
         "g" => ed.pending = Pending::G,
         "z" => ed.pending = Pending::Z,
         "K" => ed.hover_cur(),
@@ -489,6 +489,16 @@ fn normal_key(ed: &mut Editor, key: &Key, mods: ModifiersState) {
     ed.buf_mut().clamp();
 }
 
+fn g_to_line(count: u32, ed_count: u32, gg: bool) -> Motion {
+    if ed_count > 0 {
+        Motion::ToLine(count.saturating_sub(1) as usize)
+    } else if gg {
+        Motion::GG
+    } else {
+        Motion::G
+    }
+}
+
 fn visual_key(ed: &mut Editor, k: &str, count: u32) {
     match k {
         "v" => {
@@ -511,7 +521,7 @@ fn visual_key(ed: &mut Editor, k: &str, count: u32) {
             };
             ed.run_motion(m, count);
         }
-        "G" => ed.run_motion(Motion::G, count),
+        "G" => ed.run_motion(g_to_line(count, ed.count, false), 1),
         "i" => {
             ed.pending = Pending::TextObj {
                 op: Operator::Change,
@@ -1447,6 +1457,8 @@ mod tests {
             &[Key::Character("d".into()), Key::Character("0".into())],
         );
         assert_eq!(ed.buf().rope.to_string(), "llo\n");
+        assert_eq!(ed.register, "he");
+        assert_eq!(ed.buf().cursor, Pos { line: 0, col: 0 });
         assert_eq!(ed.pending, Pending::None);
     }
 
@@ -1560,5 +1572,32 @@ mod tests {
         assert_eq!(ed.count, 0);
         type_keys(&mut ed, &[Key::Character("w".into())]);
         assert_eq!(ed.buf().cursor.col, 4);
+    }
+
+    #[test]
+    fn count_g_jumps_to_line() {
+        let mut ed = Editor::new(None);
+        ed.config.clipboard = false;
+        ed.buf_mut().insert_text("l1\nl2\nl3\nl4\nl5\nl6", false);
+        type_keys(&mut ed, &["5", "G"].map(|s| Key::Character(s.into())));
+        assert_eq!(ed.buf().cursor.line, 4);
+        type_keys(&mut ed, &["g", "g"].map(|s| Key::Character(s.into())));
+        assert_eq!(ed.buf().cursor.line, 0);
+        type_keys(&mut ed, &["3", "g", "g"].map(|s| Key::Character(s.into())));
+        assert_eq!(ed.buf().cursor.line, 2);
+        type_keys(&mut ed, &["G"].map(|s| Key::Character(s.into())));
+        assert_eq!(ed.buf().cursor.line, 5);
+    }
+
+    #[test]
+    fn di_quote_with_cursor_on_closing_quote() {
+        let mut ed = Editor::new(None);
+        ed.config.clipboard = false;
+        ed.buf_mut().insert_text("hi \"bob\" ok", false);
+        ed.buf_mut().cursor = Pos { line: 0, col: 7 };
+        type_keys(&mut ed, &["d", "i", "\""].map(|s| Key::Character(s.into())));
+        assert_eq!(ed.buf().rope.to_string(), "hi \"\" ok");
+        assert_eq!(ed.mode, Mode::Normal);
+        assert_eq!(ed.buf().cursor, Pos { line: 0, col: 4 });
     }
 }
