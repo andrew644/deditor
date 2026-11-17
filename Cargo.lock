@@ -380,7 +380,6 @@ version = "0.1.0"
 dependencies = [
  "bytemuck",
  "cosmic-text",
- "fontdb",
  "glyphon",
  "lsp-types",
  "nucleo-matcher",
