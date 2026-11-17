@@ -1,5 +1,13 @@
 use std::io::Write;
 use std::process::{Command, Stdio};
+use std::sync::Condvar;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread;
+
+static STORE: Mutex<Option<String>> = Mutex::new(None);
+static STORE_CV: Condvar = Condvar::new();
+static WORKER_UP: AtomicBool = AtomicBool::new(false);
 
 #[cfg(unix)]
 static CLIP: std::sync::Mutex<Option<smithay_clipboard::Clipboard>> = std::sync::Mutex::new(None);
@@ -31,10 +39,32 @@ pub fn shutdown() {
     }
 }
 
-pub fn set(text: &str) -> crate::Result<()> {
+pub fn set(text: &str) {
     if text.is_empty() {
-        return Ok(());
+        return;
     }
+    *STORE.lock().unwrap() = Some(text.to_string());
+    if !WORKER_UP.swap(true, Ordering::SeqCst) {
+        thread::spawn(store_worker);
+    }
+    STORE_CV.notify_one();
+}
+
+fn store_worker() {
+    loop {
+        let mut g = STORE.lock().unwrap();
+        while g.is_none() {
+            g = STORE_CV.wait(g).unwrap();
+        }
+        let text = g.take().unwrap();
+        drop(g);
+        if let Err(e) = store_blocking(&text) {
+            eprintln!("deditor: clipboard: {e}");
+        }
+    }
+}
+
+fn store_blocking(text: &str) -> crate::Result<()> {
     #[cfg(unix)]
     if let Ok(slot) = CLIP.lock()
         && let Some(clip) = slot.as_ref()
@@ -235,7 +265,7 @@ mod e2e_tests {
             gpu.queue.present(frame);
             window.focus_window();
             std::thread::sleep(Duration::from_millis(1500));
-            let _ = super::set("smithay store works");
+            super::set("smithay store works");
             std::thread::sleep(Duration::from_millis(500));
             let pasted = std::process::Command::new("timeout")
                 .args(["5", "wl-paste", "-n"])

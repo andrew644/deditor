@@ -547,10 +547,8 @@ impl Editor {
         self.register = text;
         self.reg_linewise = linewise;
         self.reg_block = false;
-        if self.config.clipboard
-            && let Err(e) = crate::clipboard::set(&self.register)
-        {
-            self.set_status(format!("Clipboard: {e}"), true);
+        if self.config.clipboard {
+            crate::clipboard::set(&self.register);
         }
     }
 
