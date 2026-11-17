@@ -1,3 +1,4 @@
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
