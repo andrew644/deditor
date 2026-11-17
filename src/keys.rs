@@ -846,10 +846,10 @@ mod tests {
         type_keys(&mut ed, &[Key::Character("a".into())]);
         assert_eq!(ed.mode, Mode::Insert);
         type_keys(&mut ed, &[Key::Character("y".into())]);
-        assert_eq!(ed.buf().rope.to_string(), "axby\n");
+        assert_eq!(ed.buf().rope.to_string(), "axyb\n");
 
         type_keys(&mut ed, &[Key::Named(NamedKey::Escape)]);
-        ed.buf_mut().cursor = Pos { line: 0, col: 4 };
+        ed.buf_mut().cursor = Pos { line: 0, col: 3 };
         type_keys(
             &mut ed,
             &[
@@ -858,7 +858,8 @@ mod tests {
                 Key::Named(NamedKey::Escape),
             ],
         );
-        assert_eq!(ed.buf().rope.to_string(), "axbyz\n");
+        assert_eq!(ed.buf().rope.to_string(), "axybz\n");
+        assert_eq!(ed.buf().cursor, Pos { line: 0, col: 4 });
         assert_eq!(ed.mode, Mode::Normal);
     }
 

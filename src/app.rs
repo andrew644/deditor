@@ -339,7 +339,11 @@ impl Editor {
             self.coalesce_open = false;
             self.lsp.completion = None;
             self.mode = Mode::Normal;
-            self.buf_mut().clamp();
+            let b = self.buf_mut();
+            if b.cursor.col > 0 {
+                b.cursor.col -= 1;
+            }
+            b.clamp();
         }
     }
 
@@ -471,9 +475,10 @@ impl Editor {
                 true,
             )
         } else {
+            let len = line_chars(&self.buf().rope, b.line);
             let end = Pos {
                 line: b.line,
-                col: b.col + 1,
+                col: (b.col + 1).min(len),
             };
             ((a, end), false)
         }
@@ -1436,6 +1441,9 @@ impl Editor {
                 crate::lsp::Ev::Timeout => {
                     self.set_status("LSP request timed out".into(), true);
                 }
+                crate::lsp::Ev::Died => {
+                    self.set_status("language server exited".into(), true);
+                }
             }
         }
     }
@@ -1588,6 +1596,7 @@ impl Editor {
                 self.close_panel();
                 if idx < self.buffers.len() {
                     self.activate(idx);
+                    self.ensure_lsp();
                 }
             }
             crate::fuzzy::Panel::None => {}
@@ -1738,6 +1747,28 @@ mod tests {
         let mut ed = Editor::test_new();
         ed.buf_mut().insert_text(s, false);
         ed
+    }
+
+    #[test]
+    fn visual_operator_at_virtual_eol_is_inert() {
+        let mut ed = ed_with("ab\ncd");
+        ed.buf_mut().cursor = Pos { line: 0, col: 2 };
+        ed.register = "keep".into();
+        ed.start_visual(false);
+        let ((a, b), lw) = ed.sel_range();
+        ed.op_apply(crate::mode::Operator::Delete, (a, b), lw);
+        assert_eq!(ed.buf().rope.to_string(), "ab\ncd");
+        assert_eq!(ed.register, "keep");
+    }
+
+    #[test]
+    fn leaving_insert_steps_back_onto_the_last_char() {
+        let mut ed = ed_with("ab");
+        ed.enter_insert();
+        ed.buf_mut().insert_text("x", false);
+        assert_eq!(ed.buf().cursor, Pos { line: 0, col: 3 });
+        ed.leave_insert();
+        assert_eq!(ed.buf().cursor, Pos { line: 0, col: 2 });
     }
 
     fn text(ed: &Editor) -> String {

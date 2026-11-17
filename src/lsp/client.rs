@@ -157,6 +157,13 @@ impl LspClient {
         let _ = self.wtx.send(WriteReq::Notify(method.to_string(), params));
     }
 
+    pub fn exited(&mut self) -> bool {
+        match self.child.as_mut() {
+            Some(ch) => matches!(ch.try_wait(), Ok(Some(_))),
+            None => true,
+        }
+    }
+
     pub fn request(&mut self, method: &str, params: Value) -> u64 {
         let id = self.next_id;
         self.next_id += 1;

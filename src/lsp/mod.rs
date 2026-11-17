@@ -33,9 +33,10 @@ pub enum Ev {
     },
     NoDef,
     Timeout,
+    Died,
 }
 
-#[derive(PartialEq, Clone, Copy)]
+#[derive(PartialEq, Clone, Copy, Debug)]
 pub enum Wait {
     None,
     Hover,
@@ -341,15 +342,6 @@ impl LspManager {
                 msgs.push(m);
             }
         }
-        let timed_out = self.waiting != Wait::None
-            && self
-                .waiting_since
-                .is_some_and(|t| t.elapsed() > std::time::Duration::from_secs(15));
-        if timed_out {
-            self.waiting = Wait::None;
-            self.waiting_id = None;
-            self.waiting_since = None;
-        }
         if !msgs.is_empty() {
             self.last_rx = Some(std::time::Instant::now());
         }
@@ -446,7 +438,28 @@ impl LspManager {
                 }
             }
         }
-        if timed_out {
+        let died = self.client.as_mut().is_some_and(|c| c.exited());
+        if died {
+            self.client = None;
+            if let Some(cmd) = self.server.take() {
+                self.failed.push(cmd);
+            }
+            self.phase = Phase::Idle;
+            self.open.clear();
+            self.pending_open.clear();
+            self.waiting = Wait::None;
+            self.waiting_id = None;
+            self.waiting_since = None;
+            evs.push(Ev::Died);
+        }
+        if self.waiting != Wait::None
+            && self
+                .waiting_since
+                .is_some_and(|t| t.elapsed() > std::time::Duration::from_secs(15))
+        {
+            self.waiting = Wait::None;
+            self.waiting_id = None;
+            self.waiting_since = None;
             evs.push(Ev::Timeout);
         }
 
@@ -627,6 +640,38 @@ mod tests {
         assert!(h.contains("fn main()"));
         assert_eq!(parse_hover(Some(&serde_json::Value::Null)), None);
         assert_eq!(parse_hover(None), None);
+    }
+
+    #[test]
+    fn poll_reaps_an_exited_server() {
+        let mut m = LspManager::new();
+        m.client = Some(LspClient::spawn("true", &[], ".").unwrap());
+        m.server = Some("deadserver");
+        m.phase = Phase::Ready;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let evs = m.poll();
+            if evs.iter().any(|e| matches!(e, Ev::Died)) {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "server never reaped");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(m.client.is_none());
+        assert_eq!(m.server, None);
+        assert_eq!(m.failed, vec!["deadserver"]);
+        assert!(!m.busy());
+        assert!(m.poll().is_empty());
+    }
+
+    #[test]
+    fn young_wait_does_not_time_out() {
+        let mut m = LspManager::new();
+        m.waiting = Wait::Goto;
+        m.waiting_since = Some(std::time::Instant::now());
+        let evs = m.poll();
+        assert!(!evs.iter().any(|e| matches!(e, Ev::Timeout)));
+        assert_eq!(m.waiting, Wait::Goto);
     }
 
     #[test]

@@ -3,6 +3,24 @@
 Items found during review that could not be fixed without a design change
 or cannot be verified from this machine.
 
+## Windows: language server survives an editor crash
+
+On Unix the server inherits `PR_SET_PDEATHSIG` and dies with the
+editor. Windows has no per-process death signal, so a killed editor
+orphans `rust-analyzer` (clean exits still kill it via `Drop`). The
+proper fix is a kill-on-close job object around the spawned server;
+it cannot be verified from this Linux machine.
+
+## Rust-analyzer restart storms
+
+`ensure_lsp` respawns the configured server whenever the active
+buffer's server changes and after a failed spawn is only remembered
+per binary (`failed` list). A server binary that dies immediately
+after a successful spawn (bad config, OOM) can be respawned on every
+`activate`/`open_path`. Unverified on this machine — needs an
+environment where a server crashes in its init handshake to confirm
+the respawn cadence is actually user-visible before adding backoff.
+
 ## Search materializes the whole buffer on every step
 
 `Editor::search_step` (src/app.rs) collects the entire rope into

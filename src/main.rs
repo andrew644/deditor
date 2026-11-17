@@ -311,7 +311,14 @@ impl ApplicationHandler for App {
                 let xcell = ((mx / cw) as usize).saturating_sub(gutter);
                 let pos = ed.pos_at_cell(screen_row as usize, xcell);
                 ed.buf_mut().cursor = pos;
-                ed.buf_mut().clamp();
+                {
+                    let b = ed.buf_mut();
+                    b.clamp();
+                    let len = crate::buffer::line_chars(&b.rope, b.cursor.line);
+                    if b.cursor.col > len.saturating_sub(1) {
+                        b.cursor.col = len.saturating_sub(1);
+                    }
+                }
                 let menu = ed.context_menu_text();
                 ed.context_menu = Some(menu);
                 if let Some(w) = &self.window {
@@ -398,6 +405,9 @@ impl App {
             {
                 ts.set_font(sig.0.clone(), sig.1 * w.scale_factor() as f32);
                 self.text_sig = sig;
+            }
+            if self.close_warned && !ed.buffers.iter().any(|b| b.dirty) {
+                self.close_warned = false;
             }
         }
         let (Some(gpu), Some(text), Some(rects), Some(ed)) = (
