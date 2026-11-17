@@ -1,5 +1,4 @@
 # TODO
-- '*' on word should search for word.
 - :pwd to see what directory we are running in
 - :pwd /path to change pwd to /path
 - :e new_file_name.txt should create a blank file called file_name.txt in the pwd.

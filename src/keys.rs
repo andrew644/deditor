@@ -96,6 +96,7 @@ fn leak_char(c: char) -> Option<&'static str> {
         '$' => "$",
         '^' => "^",
         '%' => "%",
+        '*' => "*",
         ';' => ";",
         ',' => ",",
         '>' => ">",
@@ -319,6 +320,10 @@ fn normal_key(ed: &mut Editor, key: &Key, mods: ModifiersState) {
         }
         "N" => {
             ed.repeat_search(true);
+            return;
+        }
+        "*" => {
+            ed.search_cur_word();
             return;
         }
         ":" => {
@@ -978,6 +983,16 @@ mod tests {
         type_keys(&mut ed, &[Key::Character("l".into())]);
         type_keys(&mut ed, &[Key::Character("r".into()), Key::Named(NamedKey::Space)]);
         assert_eq!(ed.buf().rope.to_string(), "a  ");
+    }
+
+    #[test]
+    fn star_key_searches_forward_from_the_cursor() {
+        let mut ed = Editor::new(None);
+        ed.buf_mut().insert_text("x foo bar foo\n", false);
+        ed.buf_mut().cursor = Pos { line: 0, col: 2 };
+        type_keys(&mut ed, &[Key::Character("*".into())]);
+        assert_eq!(ed.buf().cursor, Pos { line: 0, col: 10 });
+        assert_eq!(ed.search.as_deref(), Some("foo"));
     }
 
     #[test]

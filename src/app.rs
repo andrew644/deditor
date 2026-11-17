@@ -820,6 +820,36 @@ impl Editor {
         self.search_step(&term, back);
     }
 
+    pub fn search_cur_word(&mut self) {
+        let term = {
+            let b = self.buf();
+            let text: Vec<char> = crate::buffer::line_text(&b.rope, b.cursor.line)
+                .chars()
+                .collect();
+            let Some(&c) = text.get(b.cursor.col) else {
+                return;
+            };
+            if crate::motions::char_is_word(c) {
+                let mut a = b.cursor.col;
+                let mut z = b.cursor.col;
+                while a > 0 && crate::motions::char_is_word(text[a - 1]) {
+                    a -= 1;
+                }
+                while z + 1 < text.len() && crate::motions::char_is_word(text[z + 1]) {
+                    z += 1;
+                }
+                text[a..=z].iter().collect()
+            } else if c.is_whitespace() {
+                return;
+            } else {
+                c.to_string()
+            }
+        };
+        self.search = Some(term.clone());
+        self.search_back = false;
+        self.search_step(&term, false);
+    }
+
     pub fn repeat_search(&mut self, reverse: bool) {
         let Some(term) = self.search.clone() else {
             self.set_status("E35: No previous search".to_string(), true);
@@ -1424,6 +1454,36 @@ mod tests {
         ed.cmdline = "10".to_string();
         ed.execute_cmdline();
         assert_eq!(ed.buf().cursor, Pos { line: 9, col: 3 });
+    }
+
+    #[test]
+    fn star_searches_the_word_under_the_cursor() {
+        let mut ed = ed_with("alpha beta alpha\nbeta\n");
+        ed.buf_mut().cursor = Pos { line: 0, col: 0 };
+        ed.search_cur_word();
+        assert_eq!(ed.buf().cursor, Pos { line: 0, col: 11 });
+        assert_eq!(ed.search.as_deref(), Some("alpha"));
+        assert!(!ed.status_err);
+        ed.repeat_search(false);
+        assert_eq!(ed.buf().cursor, Pos { line: 0, col: 0 });
+    }
+
+    #[test]
+    fn star_on_punctuation_searches_that_char() {
+        let mut ed = ed_with("foo.bar.baz");
+        ed.buf_mut().cursor = Pos { line: 0, col: 3 };
+        ed.search_cur_word();
+        assert_eq!(ed.buf().cursor, Pos { line: 0, col: 7 });
+        assert_eq!(ed.search.as_deref(), Some("."));
+    }
+
+    #[test]
+    fn star_on_whitespace_is_a_no_op() {
+        let mut ed = ed_with("a b");
+        ed.buf_mut().cursor = Pos { line: 0, col: 1 };
+        ed.search_cur_word();
+        assert_eq!(ed.buf().cursor, Pos { line: 0, col: 1 });
+        assert_eq!(ed.search, None);
     }
 
     #[test]
