@@ -14,11 +14,11 @@ serde_yaml_ng = "0.10"
 bytemuck = { version = "1", features = ["derive"] }
 nucleo-matcher = "0.3"
 regex = "1"
+arboard = { version = "3.7", default-features = false, features = ["wayland-data-control"] }
 
 [target.'cfg(unix)'.dependencies]
 winit = { version = "0.30.13", default-features = false, features = ["rwh_06", "wayland", "wayland-dlopen", "wayland-csd-adwaita"] }
 wgpu = { version = "30.0.2", default-features = false, features = ["std", "wgsl", "vulkan"] }
-smithay-clipboard = "0.7.3"
 libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]

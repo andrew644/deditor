@@ -11,7 +11,6 @@ use winit::window::Window;
 
 mod app;
 mod buffer;
-mod clipboard;
 mod config;
 mod fuzzy;
 mod keys;
@@ -71,7 +70,7 @@ fn main() -> Result<()> {
         close_warned: false,
     };
     let res = event_loop.run_app(&mut app);
-    clipboard::shutdown();
+    app::clipboard_shutdown();
     res?;
     Ok(())
 }
@@ -102,12 +101,11 @@ impl ApplicationHandler for App {
             .with_inner_size(LogicalSize::new(1280.0, 800.0))
             .with_title("deditor");
         let window = Arc::new(event_loop.create_window(attrs).unwrap());
-        clipboard::init(&window);
         let mut gpu = match block_on(Gpu::new(window.clone(), event_loop)) {
             Ok(g) => g,
             Err(e) => {
                 eprintln!("deditor: {e}");
-                clipboard::shutdown();
+                app::clipboard_shutdown();
                 event_loop.exit();
                 return;
             }
@@ -204,7 +202,7 @@ impl ApplicationHandler for App {
                 if let Some(ed) = &mut self.editor {
                     keys::on_key(ed, &event, self.mods);
                     if ed.quit {
-                        clipboard::shutdown();
+                        app::clipboard_shutdown();
                         event_loop.exit();
                         return;
                     }
@@ -340,7 +338,7 @@ impl ApplicationHandler for App {
                     }
                     return;
                 }
-                clipboard::shutdown();
+                app::clipboard_shutdown();
                 event_loop.exit();
             }
             _ => {}

@@ -5,6 +5,38 @@ use std::path::Path;
 
 const SCROLLOFF: usize = 8;
 
+static CLIPBOARD: std::sync::Mutex<Option<arboard::Clipboard>> = std::sync::Mutex::new(None);
+
+fn with_clipboard<T>(
+    op: impl FnOnce(&mut arboard::Clipboard) -> Result<T, arboard::Error>,
+) -> crate::Result<T> {
+    let mut slot = CLIPBOARD.lock().unwrap_or_else(|e| e.into_inner());
+    if slot.is_none() {
+        *slot = Some(arboard::Clipboard::new()?);
+    }
+    op(slot.as_mut().unwrap()).map_err(Into::into)
+}
+
+fn clipboard_set(text: &str) -> crate::Result<()> {
+    if text.is_empty() {
+        return Ok(());
+    }
+    let text = text.to_string();
+    with_clipboard(move |c| c.set_text(text))
+}
+
+fn clipboard_get() -> crate::Result<String> {
+    with_clipboard(|c| c.get_text()).map(|text| {
+        #[cfg(windows)]
+        let text = text.replace("\r\n", "\n");
+        text
+    })
+}
+
+pub fn clipboard_shutdown() {
+    *CLIPBOARD.lock().unwrap_or_else(|e| e.into_inner()) = None;
+}
+
 pub struct Editor {
     pub buffers: Vec<Buffer>,
     pub active: usize,
@@ -548,7 +580,9 @@ impl Editor {
         self.reg_linewise = linewise;
         self.reg_block = false;
         if self.config.clipboard {
-            crate::clipboard::set(&self.register);
+            if let Err(e) = clipboard_set(&self.register) {
+                eprintln!("deditor: clipboard: {e}");
+            }
         }
     }
 
@@ -591,7 +625,7 @@ impl Editor {
 
     pub fn paste(&mut self, after: bool) {
         let clip = if self.config.clipboard && !self.reg_block {
-            crate::clipboard::get().ok()
+            clipboard_get().ok()
         } else {
             None
         };
@@ -2802,5 +2836,25 @@ mod tests {
         assert!(ed.spell.words.is_empty());
         assert!(ed.lsp.hover.is_none());
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    #[ignore]
+    fn system_clipboard_round_trip() {
+        if std::env::var_os("WAYLAND_DISPLAY").is_none() && std::env::var_os("DISPLAY").is_none() {
+            eprintln!("skipping: no display");
+            return;
+        }
+        let text = "deditor smoke é中\nsecond line";
+        clipboard_set(text).unwrap();
+        assert_eq!(clipboard_get().unwrap(), text);
+        if std::process::Command::new("wl-copy")
+            .arg("-n")
+            .arg("external text")
+            .status()
+            .is_ok()
+        {
+            assert_eq!(clipboard_get().unwrap(), "external text");
+        }
     }
 }
