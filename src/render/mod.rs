@@ -979,7 +979,7 @@ pub fn draw_content(
                 &format!(
                     "{}{}",
                     if row == sel_row { "> " } else { "  " },
-                    elide_path(&ed.panel_items[idx], box_cols - 2)
+                    elide_path(&ed.panel_items[idx], box_cols.saturating_sub(2))
                 ),
                 box_cols,
             ));
@@ -1359,6 +1359,7 @@ mod tests {
         assert_eq!(elide_path("src/mod.rs", 20), "src/mod.rs");
         assert_eq!(elide_path("src/lsp/client.rs", 10), "…client.rs");
         assert_eq!(elide_path("deep/nested/path/file.txt", 1), "…");
+        assert_eq!(elide_path("deep/nested/path/file.txt", 0), "…");
     }
 
     #[test]

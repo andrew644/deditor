@@ -377,18 +377,26 @@ impl ApplicationHandler for App {
 }
 
 impl App {
+    /// The hit rectangles are only refreshed when a frame is painted, so a
+    /// window closed since the last one still has a rect: treat that as no hit
+    /// rather than indexing past the window list.
     fn hit_tab(&self, x: f64, y: f64) -> Option<(usize, usize)> {
+        let windows = self.editor.as_ref()?.windows.len();
         self.tab_ranges
             .iter()
+            .filter(|r| r.win < windows)
             .find(|r| x >= r.x0 as f64 && x < r.x1 as f64 && y >= r.y0 as f64 && y < r.y1 as f64)
             .map(|r| (r.win, r.tab))
     }
+
     fn win_under(&self, x: f64, y: f64) -> Option<usize> {
         let ts = self.text.as_ref()?;
+        let windows = self.editor.as_ref()?.windows.len();
         let cx = (x / ts.cell_w.max(1.0) as f64) as u32;
         let cy = (y / ts.cell_h.max(1.0) as f64) as u32;
         self.win_rects
             .iter()
+            .filter(|r| r.win < windows)
             .find(|r| cx >= r.x && cx < r.x + r.cols && cy >= r.y && cy < r.y + r.height)
             .map(|r| r.win)
     }

@@ -1822,15 +1822,7 @@ impl Editor {
                         .position(|b| b.path.as_ref().is_some_and(|q| same_path(q, &path)))
                     {
                         self.activate(i);
-                        let col = if line < self.buf().rope.len_lines() {
-                            crate::lsp::char_col(
-                                &crate::buffer::line_text(&self.buf().rope, line),
-                                col,
-                            )
-                        } else {
-                            col
-                        };
-                        self.buf_mut().cursor = Pos { line, col };
+                        self.buf_mut().cursor = goto_pos(&self.buffers[i].rope, line, col);
                         let rows = self.rows().max(1);
                         self.scroll_to_cursor(rows);
                         self.ensure_lsp();
@@ -2181,6 +2173,18 @@ impl Editor {
     }
 }
 
+/// Where an LSP jump lands. A stale or malformed reply can name a line past
+/// the end of the file the definition was found in, so the position is clamped
+/// into the buffer that is about to be shown.
+fn goto_pos(rope: &ropey::Rope, line: usize, col: usize) -> Pos {
+    let line = line.min(rope.len_lines().saturating_sub(1));
+    let text = crate::buffer::line_text(rope, line);
+    Pos {
+        line,
+        col: crate::lsp::char_col(&text, col),
+    }
+}
+
 fn shrink_tilde(p: &str) -> String {
     if let Some(rest) = p.strip_prefix("~/")
         && let Some(home) = std::env::var_os("HOME")
@@ -2249,6 +2253,14 @@ mod tests {
     use crate::motions::Motion;
     use crate::textobjects::Obj;
     use winit::keyboard::{Key, ModifiersState};
+
+    #[test]
+    fn a_goto_past_the_end_of_the_file_lands_inside_it() {
+        let rope = ropey::Rope::from_str("one\ntwo");
+        assert_eq!(goto_pos(&rope, 9, 0), Pos { line: 1, col: 0 });
+        assert_eq!(goto_pos(&rope, 0, 7), Pos { line: 0, col: 3 });
+        assert_eq!(goto_pos(&rope, 1, 2), Pos { line: 1, col: 2 });
+    }
 
     fn ed_with(s: &str) -> Editor {
         let mut ed = Editor::test_new();
