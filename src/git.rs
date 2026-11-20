@@ -173,6 +173,69 @@ fn groups(path: &Path, text: &str) -> Option<Vec<Group>> {
     Some(g.into_inner().finish(text.lines().count().max(1)))
 }
 
+/// Who last changed a line, and when. Both are empty for a line that is in no
+/// commit, and for every line of a file git cannot blame.
+#[derive(Clone, Default, PartialEq, Eq, Debug)]
+pub struct BlameLine {
+    pub when: String,
+    pub who: String,
+}
+
+/// The last commit to touch each line of `text`, one entry per line. The
+/// buffer's own text is blamed, so entries stay on their line while the file
+/// has unsaved edits.
+pub fn blame(path: &Path, text: &str) -> Vec<BlameLine> {
+    blamed(path, text).unwrap_or_else(|| vec![BlameLine::default(); text.lines().count().max(1)])
+}
+
+fn blamed(path: &Path, text: &str) -> Option<Vec<BlameLine>> {
+    let file = path.canonicalize().ok()?;
+    let repo = Repository::discover(file.parent()?).ok()?;
+    let root = std::fs::canonicalize(repo.workdir()?).ok()?;
+    let rel = file.strip_prefix(&root).ok()?;
+    let committed = repo.blame_file(rel, None).ok()?;
+    let blame = committed.blame_buffer(text.as_bytes()).ok()?;
+    let mut out = vec![BlameLine::default(); text.lines().count().max(1)];
+    for h in blame.iter() {
+        if h.final_commit_id().is_zero() {
+            continue;
+        }
+        let sig = h.final_signature();
+        let when = sig.when();
+        let who = sig.name().unwrap_or_default().to_string();
+        let when = date(when.seconds() as i64, when.offset_minutes());
+        let first = h.final_start_line().saturating_sub(1);
+        for row in first..first + h.lines_in_hunk() {
+            if let Some(slot) = out.get_mut(row) {
+                *slot = BlameLine {
+                    when: when.clone(),
+                    who: who.clone(),
+                };
+            }
+        }
+    }
+    Some(out)
+}
+
+/// Calendar date of a commit timestamp, in the committing author's time zone.
+fn date(secs: i64, offset_minutes: i32) -> String {
+    let z = (secs + offset_minutes as i64 * 60).div_euclid(86_400) + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    format!(
+        "{:04}-{:02}-{:02}",
+        if month <= 2 { y + 1 } else { y },
+        month,
+        day
+    )
+}
+
 fn row(line: Option<u32>) -> usize {
     line.unwrap_or(1).saturating_sub(1) as usize
 }
@@ -369,5 +432,47 @@ mod tests {
             outside.iter().all(|s| *s != Sign::Added),
             "a bare directory must not be treated as a repository: {outside:?}"
         );
+    }
+
+    #[test]
+    fn timestamps_become_author_local_dates() {
+        assert_eq!(date(0, 0), "1970-01-01");
+        assert_eq!(date(86_399, 0), "1970-01-01");
+        assert_eq!(date(86_399, 120), "1970-01-02");
+        assert_eq!(date(-86_400, 0), "1969-12-31");
+        assert_eq!(date(1_700_000_000, 0), "2023-11-14");
+        assert_eq!(date(1_735_689_600, 0), "2025-01-01");
+    }
+
+    #[test]
+    fn blame_names_the_last_author_of_each_line() {
+        let d = dir("blame");
+        let f = repo_committed(&d, "f.txt", BASE);
+        let b = blame(&f, BASE);
+        assert_eq!(b.len(), 5);
+        assert!(b.iter().all(|l| l.who == "t"), "{b:?}");
+        assert!(
+            b.iter()
+                .all(|l| l.when.len() == 10 && l.when.chars().nth(4) == Some('-')),
+            "{b:?}"
+        );
+    }
+
+    #[test]
+    fn lines_that_are_not_committed_have_no_blame() {
+        let d = dir("blamenew");
+        let f = repo_committed(&d, "f.txt", BASE);
+        let b = blame(&f, &format!("{BASE}fresh line\n"));
+        assert_eq!(b.len(), 6);
+        assert_eq!(b[5], BlameLine::default());
+        assert_eq!(b[0].who, "t");
+    }
+
+    #[test]
+    fn files_outside_a_repository_have_no_blame() {
+        let d = dir("blainenorepo");
+        let f = d.join("f.txt");
+        std::fs::write(&f, BASE).unwrap();
+        assert!(blame(&f, BASE).iter().all(|l| l.who.is_empty()));
     }
 }
