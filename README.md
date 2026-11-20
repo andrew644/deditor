@@ -98,6 +98,10 @@ is missing it is silently skipped.
 
 ### Windows (splits)
 
+The layout holds one split at a time: at most two windows, either side by side
+or stacked. Splitting again reports `Only one split is allowed`, so close the
+focused window before changing the axis.
+
 Every window has its own tab strip, line-number gutter, wrap width and scroll
 position. `Ctrl-w` starts a window command:
 
@@ -105,8 +109,8 @@ position. `Ctrl-w` starts a window command:
 | --- | --- |
 | `Ctrl-w w`, `Ctrl-w Ctrl-w` | focus the next window |
 | `Ctrl-w c` | close the focused window (fails if its buffer is dirty) |
-| `Ctrl-w s` | split the focused window into top and bottom |
-| `Ctrl-w v` | split the focused window into left and right |
+| `Ctrl-w s` | split into top and bottom (refused when a split is already open) |
+| `Ctrl-w v` | split into left and right (refused when a split is already open) |
 
 Clicking another window's tab strip or body focuses that window and the mouse
 wheel scrolls the window under the pointer. Only the focused window draws the
@@ -169,6 +173,9 @@ rectangle segment per line, padding short lines.
 | `:pwd {path}` | change directory |
 | `:r{pat}/{repl}` | find & replace every match of regex `pat` (`:rfoo/bar`) |
 | `:settings` | open the settings panel |
+
+The three split commands are refused, with `Only one split is allowed`, while a
+split is already open.
 
 `Esc` or `Ctrl-c` aborts; `Enter` executes. `~` is expanded in paths.
 

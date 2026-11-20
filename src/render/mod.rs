@@ -363,18 +363,18 @@ impl Layout {
         let ch = ts.cell_h.max(1.0);
         let cols = (gpu.config.width as f32 / cw) as u32;
         let total = (gpu.config.height as f32 / ch) as u32;
-        let mut cells = Vec::new();
-        ed.tree.rects(
+        let areas = crate::window::panes(
+            ed.split_axis,
             crate::window::Rect {
                 x: 0,
                 y: 0,
                 cols,
                 rows: total.saturating_sub(1),
             },
-            &mut cells,
         );
-        let wins: Vec<WinRect> = cells
+        let wins: Vec<WinRect> = areas
             .into_iter()
+            .enumerate()
             .filter_map(|(win, r)| {
                 let w = ed.windows.get(win)?;
                 let (num, sign) = gutter_parts(

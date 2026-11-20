@@ -1,7 +1,7 @@
 use crate::buffer::{Buffer, Pos, line_chars, line_text};
 use crate::config::{Config, RgbTheme};
 use crate::mode::{self, Mode};
-use crate::window::{Axis, Node, Window};
+use crate::window::{Axis, Window};
 use std::path::Path;
 
 const SCROLLOFF: usize = 8;
@@ -42,7 +42,7 @@ pub fn clipboard_shutdown() {
 pub struct Editor {
     pub buffers: Vec<Buffer>,
     pub windows: Vec<Window>,
-    pub tree: Node,
+    pub split_axis: Option<Axis>,
     pub active_win: usize,
     pub mode: Mode,
     pub status: Option<String>,
@@ -150,7 +150,7 @@ impl Editor {
         let mut ed = Self {
             buffers: vec![Buffer::empty()],
             windows: vec![Window::new(vec![0])],
-            tree: Node::Leaf(0),
+            split_axis: None,
             active_win: 0,
             mode: Mode::Normal,
             status: None,
@@ -243,13 +243,11 @@ impl Editor {
         self.windows[self.active_win].view_cols
     }
 
-    fn win_ids(&self) -> Vec<usize> {
-        let mut out = Vec::new();
-        self.tree.leaves(&mut out);
-        out
-    }
-
     pub fn split(&mut self, axis: Axis) {
+        if self.windows.len() > 1 {
+            self.set_status("Only one split is allowed".to_string(), true);
+            return;
+        }
         let (room, min) = match axis {
             Axis::Columns => (self.win().view_cols, MIN_SPLIT_COLS),
             Axis::Rows => (self.win().view_rows, MIN_SPLIT_ROWS),
@@ -258,27 +256,19 @@ impl Editor {
             self.set_status("E36: Not enough room to split".to_string(), true);
             return;
         }
-        let id = self.windows.len();
         let mut w = Window::new(self.win().tabs.clone());
         w.cur = self.win().cur;
-        if !self.tree.split_leaf(self.active_win, axis, id) {
-            return;
-        }
+        self.split_axis = Some(axis);
         self.windows.push(w);
-        self.active_win = id;
-        self.set_status(
-            format!("[Window {} of {}]", id + 1, self.windows.len()),
-            false,
-        );
+        self.active_win = 1;
+        self.set_status("[Window 2 of 2]".to_string(), false);
     }
 
     pub fn focus_next(&mut self) -> bool {
-        let ids = self.win_ids();
-        if ids.len() < 2 {
+        if self.windows.len() < 2 {
             return false;
         }
-        let pos = ids.iter().position(|i| *i == self.active_win).unwrap_or(0);
-        let next = ids[(pos + 1) % ids.len()];
+        let next = (self.active_win + 1) % self.windows.len();
         let prev = self.active();
         self.active_win = next;
         if self.active() != prev {
@@ -292,18 +282,9 @@ impl Editor {
         if self.windows.len() < 2 {
             return false;
         }
-        let dead = self.active_win;
-        let ids = self.win_ids();
-        let next = ids
-            .iter()
-            .copied()
-            .find(|i| *i > dead)
-            .or_else(|| ids.iter().copied().find(|i| *i < dead))
-            .unwrap();
-        self.tree.remove_leaf(dead);
-        self.tree.drop_id(dead);
-        self.windows.remove(dead);
-        self.active_win = if next > dead { next - 1 } else { next };
+        self.windows.remove(self.active_win);
+        self.split_axis = None;
+        self.active_win = 0;
         self.reset_buffer_state();
         self.ensure_lsp();
         true
@@ -4043,20 +4024,45 @@ mod tests {
     }
 
     #[test]
-    fn split_commands_stack_windows_on_the_same_tabs() {
+    fn split_shares_the_focused_window_tabs() {
         let mut ed = ed_with("one\ntwo\n");
         ed.cmdline = "split".to_string();
         ed.execute_cmdline();
         assert_eq!(ed.windows.len(), 2);
         assert_eq!(ed.active_win, 1);
         assert_eq!(text(&ed), "one\ntwo\n");
+        assert!(ed.windows.iter().all(|w| w.tabs == vec![0]));
+    }
+
+    #[test]
+    fn a_second_split_is_refused_whatever_the_axis() {
+        let mut ed = ed_with("one\ntwo\n");
         ed.cmdline = "vsplit".to_string();
         ed.execute_cmdline();
-        ed.cmdline = "hsplit".to_string();
-        ed.execute_cmdline();
-        assert_eq!(ed.windows.len(), 4);
-        assert_eq!(ed.win_ids(), vec![0, 1, 2, 3]);
-        assert!(ed.windows.iter().all(|w| w.tabs == vec![0]));
+        assert_eq!(ed.split_axis, Some(Axis::Columns));
+        for cmd in ["split", "vsplit", "hsplit"] {
+            ed.cmdline = cmd.to_string();
+            ed.execute_cmdline();
+            assert_eq!(ed.windows.len(), 2, "{cmd} added a window");
+            assert_eq!(ed.split_axis, Some(Axis::Columns), "{cmd} moved it");
+            assert!(ed.status_err);
+            assert_eq!(ed.status.as_deref(), Some("Only one split is allowed"));
+        }
+    }
+
+    #[test]
+    fn closing_a_window_leaves_one_window_that_can_split_again() {
+        let mut ed = ed_with("one\ntwo\n");
+        ed.split(Axis::Rows);
+        let b = ed.buf_mut();
+        b.saved = b.rope.clone();
+        b.dirty = false;
+        assert!(ed.close_window());
+        assert_eq!(ed.split_axis, None);
+        assert_eq!(ed.active_win, 0);
+        ed.split(Axis::Columns);
+        assert_eq!(ed.windows.len(), 2);
+        assert_eq!(ed.split_axis, Some(Axis::Columns));
     }
 
     #[test]
