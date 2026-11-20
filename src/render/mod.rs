@@ -269,6 +269,23 @@ fn place_popup(want: f32, size: f32, origin: f32, span: f32) -> f32 {
     want.min(origin + span - size).max(origin)
 }
 
+/// Text of the buffer line a screen-row loop last looked at. Wrapped lines
+/// repeat the same buffer line over many screen rows.
+struct LineCache {
+    line: usize,
+    text: String,
+}
+
+impl LineCache {
+    fn get(&mut self, rope: &ropey::Rope, line: usize) -> &str {
+        if self.line != line {
+            self.line = line;
+            self.text = crate::buffer::line_text(rope, line);
+        }
+        &self.text
+    }
+}
+
 pub struct TabHit {
     pub x0: f32,
     pub x1: f32,
@@ -461,6 +478,10 @@ pub fn draw_content(
             }
             _ => ed.search.clone(),
         };
+        let mut lines = LineCache {
+            line: usize::MAX,
+            text: String::new(),
+        };
         if let Some(term) = hi_term {
             let t: Vec<char> = term.chars().collect();
             let fold = crate::search::ignore_case(&term);
@@ -469,7 +490,7 @@ pub fn draw_content(
                     if scr.line >= buf.rope.len_lines() || scr.start >= scr.end {
                         continue;
                     }
-                    let raw = crate::buffer::line_text(&buf.rope, scr.line);
+                    let raw = lines.get(&buf.rope, scr.line);
                     let chars: Vec<char> = raw.chars().collect();
                     for i in scr.start..scr.end {
                         if i + t.len() > chars.len() {
@@ -479,7 +500,7 @@ pub fn draw_content(
                             continue;
                         }
                         rects.push(rects::RectInstance {
-                            x: ox + (gutter + wrap.pos(&raw, i).1) as f32 * cw,
+                            x: ox + (gutter + wrap.pos(raw, i).1) as f32 * cw,
                             y: wy + r as f32 * ch,
                             w: t.len().min(scr.end - i) as f32 * cw,
                             h: ch,
@@ -494,7 +515,7 @@ pub fn draw_content(
                 if scr.line >= buf.rope.len_lines() || scr.start >= scr.end {
                     continue;
                 }
-                let raw = crate::buffer::line_text(&buf.rope, scr.line);
+                let raw = lines.get(&buf.rope, scr.line);
                 let Some((_, spans)) = ed.spell.spans.get(&scr.line) else {
                     continue;
                 };
@@ -503,7 +524,7 @@ pub fn draw_content(
                         continue;
                     }
                     rects.push(rects::RectInstance {
-                        x: ox + (gutter + wrap.pos(&raw, col).1) as f32 * cw,
+                        x: ox + (gutter + wrap.pos(raw, col).1) as f32 * cw,
                         y: wy + r as f32 * ch + ch - 2.0,
                         w: len.min(scr.end - col) as f32 * cw,
                         h: 2.0,
@@ -520,10 +541,10 @@ pub fn draw_content(
                 if scr.line < r0 || scr.line > r1 || scr.line >= buf.rope.len_lines() {
                     continue;
                 }
-                let raw = crate::buffer::line_text(&buf.rope, scr.line);
+                let raw = lines.get(&buf.rope, scr.line);
                 let len = raw.chars().count();
-                let lx = (gutter + wrap.pos(&raw, c0.min(len)).1) as f32 * cw;
-                let mut width = (gutter + wrap.pos(&raw, (c1 + 1).min(len)).1) as f32 * cw - lx;
+                let lx = (gutter + wrap.pos(raw, c0.min(len)).1) as f32 * cw;
+                let mut width = (gutter + wrap.pos(raw, (c1 + 1).min(len)).1) as f32 * cw - lx;
                 if c1 + 1 > len {
                     width += (c1 + 1 - len) as f32 * cw;
                 }
@@ -546,7 +567,7 @@ pub fn draw_content(
                 if line >= buf.rope.len_lines() || scr.start >= scr.end {
                     continue;
                 }
-                let raw = crate::buffer::line_text(&buf.rope, line);
+                let raw = lines.get(&buf.rope, scr.line);
                 let (from, to) = match sel_row_span(sa, sb, lw, line) {
                     Some(f) => f,
                     None => continue,
@@ -556,12 +577,12 @@ pub fn draw_content(
                 if a >= scr.end {
                     continue;
                 }
-                let lx = (gutter + wrap.pos(&raw, a).1) as f32 * cw;
+                let lx = (gutter + wrap.pos(raw, a).1) as f32 * cw;
                 let width = if to == usize::MAX {
                     wc - lx
                 } else {
                     let b = to.min(scr.end).max(a + 1);
-                    (gutter + wrap.pos(&raw, b).1) as f32 * cw - lx
+                    (gutter + wrap.pos(raw, b).1) as f32 * cw - lx
                 };
                 if width <= 0.0 {
                     continue;
@@ -626,8 +647,8 @@ pub fn draw_content(
                         s.push(' ');
                     }
                 }
-                let raw = crate::buffer::line_text(&buf.rope, row.line);
-                body_s.push_str(&wrap.text(&raw, row.start, row.end, ed.config.show_whitespace));
+                let raw = lines.get(&buf.rope, row.line);
+                body_s.push_str(&wrap.text(raw, row.start, row.end, ed.config.show_whitespace));
             }
             if r + 1 < rows.len() {
                 gutter_s.push('\n');
@@ -637,28 +658,10 @@ pub fn draw_content(
                 }
             }
         }
-        let (first_line, last_line) = match (rows.first(), rows.last()) {
-            (Some(a), Some(b)) => (a.line, b.line),
-            _ => (0, 0),
-        };
         for d in ed.lsp.diags_for(buf.path.as_ref()) {
-            if d.line < first_line || d.line > last_line {
-                continue;
-            }
-            let Some(row) = wrap.screen_row(
-                &buf.rope,
-                buf.view_top,
-                buf.view_sub,
-                crate::buffer::Pos {
-                    line: d.line,
-                    col: 0,
-                },
-            ) else {
+            let Some(row) = rows.iter().position(|r| r.line == d.line) else {
                 continue;
             };
-            if row >= rows.len() {
-                continue;
-            }
             rects.push(rects::RectInstance {
                 x: ox,
                 y: wy + row as f32 * ch,
