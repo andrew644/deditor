@@ -378,7 +378,7 @@ impl Editor {
         let tw = self.tab_width();
         for ch in line.chars().take(upto) {
             if ch == '\t' {
-                let pad = tw - (visual_col(&out) % tw);
+                let pad = tw - (crate::wrap::cells(&out) % tw);
                 for _ in 0..pad {
                     out.push(' ');
                 }
@@ -2241,10 +2241,6 @@ fn files_root(dir: &str) -> std::path::PathBuf {
     } else {
         std::path::PathBuf::from(expanded)
     }
-}
-
-pub fn visual_col(s: &str) -> usize {
-    s.chars().count()
 }
 
 #[cfg(test)]

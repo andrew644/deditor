@@ -1,6 +1,7 @@
 pub mod rects;
 
 use crate::buffer::Pos;
+use crate::wrap::{cell_of, cells};
 use cosmic_text::{Attrs, Buffer, Family, FontSystem, Metrics, Shaping, SwashCache};
 use glyphon::{Cache, TextAtlas, TextRenderer, Viewport};
 use std::sync::Arc;
@@ -249,8 +250,11 @@ fn blame_text(e: Option<&crate::git::BlameLine>, w: usize) -> String {
     let Some(e) = e.filter(|e| !e.who.is_empty()) else {
         return " ".repeat(w);
     };
-    let who: String = e.who.chars().take(name).collect();
-    format!("{:>10} {:<name$} ", e.when, who, name = name)
+    let who = take_cells(&e.who, name);
+    let mut out = format!("{:>10} {who}", e.when);
+    out.push_str(&" ".repeat(name - cells(&who)));
+    out.push(' ');
+    out
 }
 
 /// Widths of the gutter fields in a pane `cols` columns wide, leaving the body
@@ -307,7 +311,7 @@ pub fn tab_hit_ranges(ed: &crate::app::Editor, l: &Layout, cw: f32, ch: f32) -> 
             if x >= right {
                 break;
             }
-            let wid = tab_label(tab, &ed.buffers[bi]).chars().count() as f32 * cw;
+            let wid = cells(&tab_label(tab, &ed.buffers[bi])) as f32 * cw;
             out.push(TabHit {
                 x0: x,
                 x1: x + wid,
@@ -436,7 +440,7 @@ pub fn draw_content(
         let mut tab_text = String::new();
         for (i, &bi) in win.tabs.iter().enumerate() {
             let label = tab_label(i, &ed.buffers[bi]);
-            let start = ox + tab_text.chars().count() as f32 * cw;
+            let start = ox + cells(&tab_text) as f32 * cw;
             if start >= ox + wc {
                 break;
             }
@@ -444,7 +448,7 @@ pub fn draw_content(
             rects.push(rects::RectInstance {
                 x: start,
                 y: oy,
-                w: label.chars().count() as f32 * cw,
+                w: cells(&label) as f32 * cw,
                 h: ch,
                 color: if !focused {
                     theme.status_bg
@@ -783,7 +787,7 @@ pub fn draw_content(
     };
     let ruler = format!("{}:{}", buf.cursor.line + 1, buf.cursor.col + 1);
     let right_x = (l.cols as usize)
-        .saturating_sub(ruler.chars().count() + mode_label.chars().count() + 3)
+        .saturating_sub(cells(&ruler) + cells(mode_label) + 3)
         .max(1);
     let room = right_x.saturating_sub(1);
     let left_s = match ed.cmd_kind {
@@ -853,11 +857,7 @@ pub fn draw_content(
     let menu_open = !menu_s.is_empty() && ed.panel == crate::fuzzy::Panel::None;
     let mut menu_pos = None;
     if menu_open {
-        let mcols = menu_lines
-            .iter()
-            .map(|s| s.chars().count())
-            .max()
-            .unwrap_or(1);
+        let mcols = menu_lines.iter().map(|s| cells(s)).max().unwrap_or(1);
         let mrows = menu_lines.len() as f32;
         let mw = mcols as f32 * cw;
         let mx = place_popup(cur_x, mw, ox, wc);
@@ -1002,7 +1002,7 @@ pub fn draw_content(
             ));
         }
         let (cx, cy, box_w, box_h) = completion_box(
-            ed.cmdline.chars().count(),
+            cells(&ed.cmdline),
             room,
             cpl_s.lines().count(),
             box_cols,
@@ -1268,8 +1268,23 @@ fn mkbuf(ts: &mut TextSystem, s: &str, w: f32, h: f32) -> Buffer {
     b
 }
 
+/// The longest prefix of `s` that fits in `room` cells.
+fn take_cells(s: &str, room: usize) -> String {
+    let mut out = String::new();
+    let mut used = 0;
+    for c in s.chars() {
+        let w = cell_of(c);
+        if used + w > room {
+            break;
+        }
+        used += w;
+        out.push(c);
+    }
+    out
+}
+
 fn fit(s: &str, room: usize) -> String {
-    s.chars().take(room).collect()
+    take_cells(s, room)
 }
 
 /// Half-open cell span `[from, to)` the visual selection covers on `line`.
@@ -1308,19 +1323,26 @@ fn sel_row_span(sa: Pos, sb: Pos, lw: bool, line: usize) -> Option<(Option<usize
 }
 
 fn elide_path(s: &str, cols: usize) -> String {
-    let chars: Vec<char> = s.chars().collect();
-    if chars.len() <= cols {
+    if cells(s) <= cols {
         return s.to_string();
     }
-    let keep = cols.saturating_sub(1);
-    let mut out = String::from("…");
-    out.extend(chars.iter().skip(chars.len() - keep));
-    out
+    let mut kept = String::new();
+    let mut used = 1;
+    for c in s.chars().rev() {
+        let w = cell_of(c);
+        if used + w > cols {
+            break;
+        }
+        used += w;
+        kept.insert(0, c);
+    }
+    format!("…{kept}")
 }
 
 fn pad_line(s: &str, cols: usize) -> String {
-    let trimmed: String = s.chars().take(cols).collect();
-    format!("{trimmed:<cols$}")
+    let mut out = take_cells(s, cols);
+    out.push_str(&" ".repeat(cols - cells(&out)));
+    out
 }
 
 #[cfg(test)]
@@ -1351,8 +1373,13 @@ mod tests {
             who: "andrew".into(),
         };
         for w in [0, 5, 11, 12, 21, BLAME_W] {
-            assert_eq!(blame_text(Some(&e), w).chars().count(), w, "width {w}");
+            assert_eq!(cells(&blame_text(Some(&e), w)), w, "width {w}");
         }
+        let cjk = crate::git::BlameLine {
+            when: "2026-11-20".into(),
+            who: "佐藤一郎".into(),
+        };
+        assert_eq!(cells(&blame_text(Some(&cjk), BLAME_W)), BLAME_W);
         assert_eq!(blame_text(Some(&e), 12).trim_end(), "2026-11-20");
         assert_eq!(blame_text(None, BLAME_W), " ".repeat(BLAME_W));
     }
@@ -1558,5 +1585,17 @@ mod tests {
             sel_row_span(p(0, 0), p(1, 3), true, 1),
             Some((None, usize::MAX))
         );
+    }
+
+    #[test]
+    fn wide_glyphs_are_measured_in_cells() {
+        assert_eq!(cells("abc"), 3);
+        assert_eq!(cells("日本語"), 6);
+        assert_eq!(cells("a😀b"), 4);
+        assert_eq!(cells("e\u{301}"), 1);
+        assert_eq!(fit("日本語", 4), "日本");
+        assert_eq!(pad_line("日本", 6), "日本  ");
+        assert_eq!(pad_line("日本語", 6), "日本語");
+        assert_eq!(elide_path("src/日本語.rs", 7), "…語.rs");
     }
 }

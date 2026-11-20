@@ -1,6 +1,16 @@
 use crate::buffer::{Pos, line_text};
 use ropey::Rope;
 
+/// Cells a string occupies in the grid: one for most characters, two for the
+/// wide ones used by CJK and emoji, none for a combining mark.
+pub fn cells(s: &str) -> usize {
+    s.chars().map(cell_of).sum()
+}
+
+pub fn cell_of(c: char) -> usize {
+    unicode_width::UnicodeWidthChar::width(c).unwrap_or(1)
+}
+
 /// One screen row of a wrapped buffer line: the half-open char range
 /// `[start, end)` that the row displays. `start == 0` marks the row that
 /// carries the line number.
@@ -42,7 +52,7 @@ impl Wrap {
         if c == '\t' {
             self.tab_width - (x % self.tab_width)
         } else {
-            1
+            cell_of(c)
         }
     }
 
@@ -448,5 +458,14 @@ mod tests {
         let r = rope("short\nnext line\n");
         let w = Wrap::new(40, 4);
         assert_eq!(w.scroll(&r, 0, 9, 1), (1, 0));
+    }
+
+    #[test]
+    fn wide_glyphs_wrap_by_their_two_cells() {
+        let w = Wrap::new(6, 4);
+        assert_eq!(w.rows("你好世界"), vec![(0, 3), (3, 4)]);
+        assert_eq!(w.row_count("日本語"), 1);
+        assert_eq!(w.pos("a😀b", 2), (0, 3));
+        assert_eq!(w.pos("a😀b", 3), (0, 4));
     }
 }
