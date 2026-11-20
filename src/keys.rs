@@ -580,15 +580,14 @@ fn visual_key(ed: &mut Editor, k: &str, count: u32) {
                 ed.visual_anchor = None;
             }
         }
-        ">" => {
+        ">" | "<" => {
+            let op = if k == ">" {
+                Operator::Indent
+            } else {
+                Operator::Outdent
+            };
             let ((a, b), _) = ed.sel_range();
-            ed.op_apply(Operator::Indent, (a, b), true);
-            ed.mode = Mode::Normal;
-            ed.visual_anchor = None;
-        }
-        "<" => {
-            let ((a, b), _) = ed.sel_range();
-            ed.op_apply(Operator::Outdent, (a, b), true);
+            ed.op_apply(op, (a, b), true);
             ed.mode = Mode::Normal;
             ed.visual_anchor = None;
         }

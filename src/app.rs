@@ -1011,53 +1011,53 @@ impl Editor {
         self.clear_pending();
     }
 
+    fn open_line(&mut self, at: Pos, after: Option<Pos>, ind: String, coalesce: bool) {
+        self.buf_mut().cursor = at;
+        self.buf_mut().insert_text("\n", coalesce);
+        if let Some(p) = after {
+            self.buf_mut().cursor = p;
+        }
+        if !ind.is_empty() {
+            self.buf_mut().insert_text(&ind, coalesce);
+        }
+    }
+
     pub fn newline_in_insert(&mut self) {
-        let co = self.coalesce_open;
         let c = self.buf().cursor;
-        let tw = self.tab_width();
         let before: String = crate::buffer::line_text(&self.buf().rope, c.line)
             .chars()
             .take(c.col)
             .collect();
-        let ind = crate::buffer::indent_below(&before, tw);
-        self.buf_mut().insert_text("\n", co);
-        self.buf_mut().insert_text(&ind, co);
+        let ind = crate::buffer::indent_below(&before, self.tab_width());
+        self.open_line(c, None, ind, self.coalesce_open);
     }
 
     pub fn new_line_below(&mut self) {
         let c = self.buf().cursor;
+        let line = crate::buffer::line_text(&self.buf().rope, c.line);
+        let ind = crate::buffer::indent_below(&line, self.tab_width());
         let len = line_chars(&self.buf().rope, c.line);
-        let tw = self.tab_width();
-        let ind =
-            crate::buffer::indent_below(&crate::buffer::line_text(&self.buf().rope, c.line), tw);
-        self.buf_mut().cursor = Pos {
-            line: c.line,
-            col: len,
-        };
-        self.buf_mut().insert_text("\n", false);
-        if !ind.is_empty() {
-            self.buf_mut().insert_text(&ind, false);
-        }
+        self.open_line(
+            Pos {
+                line: c.line,
+                col: len,
+            },
+            None,
+            ind,
+            false,
+        );
         self.enter_insert();
     }
 
     pub fn new_line_above(&mut self) {
         let c = self.buf().cursor;
-        let tw = self.tab_width();
-        let ind =
-            crate::buffer::indent_above(&crate::buffer::line_text(&self.buf().rope, c.line), tw);
-        self.buf_mut().cursor = Pos {
+        let line = crate::buffer::line_text(&self.buf().rope, c.line);
+        let ind = crate::buffer::indent_above(&line, self.tab_width());
+        let top = Pos {
             line: c.line,
             col: 0,
         };
-        self.buf_mut().insert_text("\n", false);
-        self.buf_mut().cursor = Pos {
-            line: c.line,
-            col: 0,
-        };
-        if !ind.is_empty() {
-            self.buf_mut().insert_text(&ind, false);
-        }
+        self.open_line(top, Some(top), ind, false);
         self.enter_insert();
     }
 
