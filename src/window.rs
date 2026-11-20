@@ -34,10 +34,13 @@ impl Window {
     }
 
     pub fn show(&mut self, buf: usize) {
-        if !self.tabs.contains(&buf) {
-            self.tabs.push(buf);
+        match self.tabs.iter().position(|b| *b == buf) {
+            Some(i) => self.cur = i,
+            None => {
+                self.tabs.push(buf);
+                self.cur = self.tabs.len() - 1;
+            }
         }
-        self.cur = self.tabs.iter().position(|b| *b == buf).unwrap();
     }
 
     pub fn next_tab(&mut self) {

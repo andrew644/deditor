@@ -71,6 +71,7 @@ fn main() -> Result<()> {
         proxy: Some(event_loop.create_proxy()),
         pump_armed: false,
         close_warned: false,
+        paint_warned: false,
     };
     let res = event_loop.run_app(&mut app);
     app::clipboard_shutdown();
@@ -94,6 +95,7 @@ struct App {
     proxy: Option<winit::event_loop::EventLoopProxy<()>>,
     pump_armed: bool,
     close_warned: bool,
+    paint_warned: bool,
 }
 
 impl ApplicationHandler for App {
@@ -104,7 +106,15 @@ impl ApplicationHandler for App {
         let attrs = Window::default_attributes()
             .with_inner_size(LogicalSize::new(1280.0, 800.0))
             .with_title("deditor");
-        let window = Arc::new(event_loop.create_window(attrs).unwrap());
+        let window = match event_loop.create_window(attrs) {
+            Ok(w) => Arc::new(w),
+            Err(e) => {
+                eprintln!("deditor: {e}");
+                app::clipboard_shutdown();
+                event_loop.exit();
+                return;
+            }
+        };
         let mut gpu = match block_on(Gpu::new(window.clone(), event_loop)) {
             Ok(g) => g,
             Err(e) => {
@@ -511,7 +521,18 @@ impl App {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
         ed.refresh_spell_spans();
         ed.refresh_marks();
-        render::draw_content(gpu, text, rects, ed, &view, &mut encoder);
+        if let Err(e) = render::draw_content(gpu, text, rects, ed, &view, &mut encoder) {
+            if !self.paint_warned {
+                self.paint_warned = true;
+                eprintln!("deditor: {}", e.0);
+            }
+            gpu.configure(gpu.config.width, gpu.config.height);
+            if let Some(w) = &self.window {
+                w.request_redraw();
+            }
+            return;
+        }
+        self.paint_warned = false;
         gpu.queue.submit(Some(encoder.finish()));
         gpu.queue.present(frame);
     }

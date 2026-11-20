@@ -8,6 +8,12 @@ use std::sync::Arc;
 use winit::event_loop::ActiveEventLoop;
 use winit::window::Window;
 
+/// A frame could not be painted, usually because the surface went out of date
+/// while the window was resized. The caller drops the frame and asks for
+/// another one instead of taking the editor down with unsaved buffers.
+#[derive(Debug)]
+pub struct PaintError(pub String);
+
 pub struct Gpu {
     pub instance: wgpu::Instance,
     pub device: wgpu::Device,
@@ -415,7 +421,7 @@ pub fn draw_content(
     ed: &crate::app::Editor,
     view: &wgpu::TextureView,
     encoder: &mut wgpu::CommandEncoder,
-) {
+) -> Result<(), PaintError> {
     let l = Layout::new(gpu, ts, ed);
     let cw = ts.cell_w;
     let ch = ts.cell_h;
@@ -713,7 +719,7 @@ pub fn draw_content(
             bw: wc,
             bh: wr.body_rows() as f32 * ch,
             gutter_cols: wr.gutter,
-            blame_cols: u32::try_from(usize::from(ed.show_blame) * BLAME_W).unwrap(),
+            blame_cols: if ed.show_blame { BLAME_W as u32 } else { 0 },
             focused,
         });
     }
@@ -1097,7 +1103,7 @@ pub fn draw_content(
             rects,
             areas,
         },
-    );
+    )?;
     if !overlay.is_empty() || !oareas.is_empty() {
         draw_layer(
             gpu,
@@ -1111,9 +1117,10 @@ pub fn draw_content(
                 rects: overlay,
                 areas: oareas,
             },
-        );
+        )?;
     }
     ts.atlas.trim();
+    Ok(())
 }
 
 /// One paint pass: its rects, then its text. Drawing a popup's opaque
@@ -1132,7 +1139,7 @@ fn draw_layer(
     encoder: &mut wgpu::CommandEncoder,
     view: &wgpu::TextureView,
     layer: Layer<'_>,
-) {
+) -> Result<(), PaintError> {
     let Layer {
         load,
         overlay,
@@ -1167,7 +1174,7 @@ fn draw_layer(
     });
     rp.draw(gpu, &mut pass, &rects, overlay);
     if areas.is_empty() {
-        return;
+        return Ok(());
     }
     renderer
         .prepare(
@@ -1192,8 +1199,11 @@ fn draw_layer(
             }),
             swash_cache,
         )
-        .unwrap();
-    renderer.render(atlas, viewport, &mut pass).unwrap();
+        .map_err(|e| PaintError(e.to_string()))?;
+    renderer
+        .render(atlas, viewport, &mut pass)
+        .map_err(|e| PaintError(e.to_string()))?;
+    Ok(())
 }
 
 fn completion_box(
