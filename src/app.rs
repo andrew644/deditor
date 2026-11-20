@@ -2111,12 +2111,14 @@ impl Editor {
         Some((c.prefix.clone(), name))
     }
 
-    pub fn open_path(&mut self, p: std::path::PathBuf) {
-        if let Some(i) = self
-            .buffers
+    fn buffer_with_path(&self, p: &std::path::Path) -> Option<usize> {
+        self.buffers
             .iter()
-            .position(|b| b.path.as_ref().is_some_and(|q| same_path(q, &p)))
-        {
+            .position(|b| b.path.as_ref().is_some_and(|q| same_path(q, p)))
+    }
+
+    pub fn open_path(&mut self, p: std::path::PathBuf) {
+        if let Some(i) = self.buffer_with_path(&p) {
             self.activate(i);
             self.ensure_lsp();
             return;
@@ -2149,11 +2151,7 @@ impl Editor {
     }
 
     pub fn edit_path_in_new_buffer(&mut self, p: std::path::PathBuf) {
-        if let Some(i) = self
-            .buffers
-            .iter()
-            .position(|b| b.path.as_ref().is_some_and(|q| same_path(q, &p)))
-        {
+        if let Some(i) = self.buffer_with_path(&p) {
             let name = self.buffers[i].display_name();
             if i != self.active() {
                 self.activate(i);

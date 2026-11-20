@@ -54,20 +54,10 @@ pub fn split_path_query(q: &str) -> (&str, &str) {
 }
 
 pub fn list_dir(dir: &Path) -> Vec<String> {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return Vec::new();
-    };
-    let mut out = Vec::new();
-    for entry in entries.flatten() {
-        let name = entry.file_name().to_string_lossy().to_string();
-        if name.starts_with('.') {
-            continue;
-        }
-        let is_dir = entry.path().is_dir();
-        out.push(if is_dir { format!("{name}/") } else { name });
-    }
-    out.sort();
-    out
+    visible_entries(dir)
+        .into_iter()
+        .map(|(name, is_dir)| if is_dir { format!("{name}/") } else { name })
+        .collect()
 }
 
 pub const MAX_TREE_ENTRIES: usize = 20_000;
