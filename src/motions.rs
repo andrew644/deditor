@@ -50,6 +50,31 @@ pub fn char_is_word(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
 }
 
+/// The character class a word run is made of.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Class {
+    Word,
+    Punct,
+    Blank,
+}
+
+pub fn class_of(c: char) -> Class {
+    if c.is_whitespace() {
+        Class::Blank
+    } else if char_is_word(c) {
+        Class::Word
+    } else {
+        Class::Punct
+    }
+}
+
+/// Does `c` belong to a run of class `run`? A WORD (`big`) run is any run of
+/// non-blanks, so its class does not matter.
+pub fn in_run(c: char, run: Class, big: bool) -> bool {
+    let c = class_of(c);
+    if big { c != Class::Blank } else { c == run }
+}
+
 pub struct Ctx {
     pub rows: usize,
     pub wrap: crate::wrap::Wrap,
@@ -187,8 +212,8 @@ fn w_one(rope: &Rope, p: Pos, big: bool) -> Pos {
         }
         return Pos { line, col };
     }
-    let word_start = char_is_word(chars[col]);
-    while col < len && continues(chars[col], word_start, big) {
+    let run = class_of(chars[col]);
+    while col < len && in_run(chars[col], run, big) {
         col += 1;
     }
     if col >= len {
@@ -222,8 +247,8 @@ fn b_one(rope: &Rope, p: Pos, big: bool) -> Pos {
             col -= 1;
         }
         if col > 0 {
-            let word_start = char_is_word(chars[col - 1]);
-            while col > 0 && continues(chars[col - 1], word_start, big) {
+            let run = class_of(chars[col - 1]);
+            while col > 0 && in_run(chars[col - 1], run, big) {
                 col -= 1;
             }
             return Pos { line, col };
@@ -298,9 +323,9 @@ fn e_one(rope: &Rope, p: Pos, big: bool) -> Pos {
             col = 0;
             continue;
         }
-        let word_start = char_is_word(chars[col]);
+        let run = class_of(chars[col]);
         let mut end = col;
-        while end < chars.len() && continues(chars[end], word_start, big) {
+        while end < chars.len() && in_run(chars[end], run, big) {
             end += 1;
         }
         return Pos { line, col: end - 1 };
@@ -336,24 +361,10 @@ fn ge_one(rope: &Rope, p: Pos, big: bool) -> Pos {
     }
 }
 
-/// Does `c` continue a run that began on a word character (`word_start`)? A
-/// WORD (`big`) run only ends at whitespace.
-fn continues(c: char, word_start: bool, big: bool) -> bool {
-    if big {
-        !c.is_whitespace()
-    } else if word_start {
-        char_is_word(c)
-    } else {
-        !c.is_whitespace() && !char_is_word(c)
-    }
-}
-
+/// Do two neighbouring characters sit in the same run? `a` is never blank at
+/// the only call site.
 fn same_class(a: char, b: char, big: bool) -> bool {
-    if big {
-        !a.is_whitespace() && !b.is_whitespace()
-    } else {
-        continues(b, char_is_word(a), false)
-    }
+    in_run(b, class_of(a), big)
 }
 
 fn find_fwd(rope: &Rope, p: Pos, c: char, n: usize, till: bool) -> Option<Pos> {
@@ -457,6 +468,22 @@ fn percent(rope: &Rope, p: Pos) -> Pos {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn word_runs_stop_at_the_class_the_run_started_in() {
+        assert_eq!(class_of('_'), Class::Word);
+        assert_eq!(class_of('a'), Class::Word);
+        assert_eq!(class_of('('), Class::Punct);
+        assert_eq!(class_of(' '), Class::Blank);
+        assert!(in_run('b', Class::Word, false));
+        assert!(!in_run('(', Class::Word, false));
+        assert!(in_run('-', Class::Punct, false));
+        assert!(!in_run('a', Class::Punct, false));
+        assert!(!in_run(' ', Class::Punct, false));
+        assert!(in_run('(', Class::Word, true));
+        assert!(in_run('a', Class::Punct, true));
+        assert!(!in_run('\t', Class::Word, true));
+    }
 
     fn rope(s: &str) -> Rope {
         Rope::from_str(s)

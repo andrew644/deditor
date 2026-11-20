@@ -1,5 +1,5 @@
 use crate::buffer::Pos;
-use crate::motions::char_is_word;
+use crate::motions::{class_of, in_run};
 use ropey::Rope;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -32,40 +32,18 @@ fn char_at(rope: &Rope, off: usize) -> Option<char> {
     }
 }
 
-/// The character class a word text object runs over.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Run {
-    Word,
-    Other,
-    Blank,
-}
-
-fn run_of(c: char) -> Run {
-    if c.is_whitespace() {
-        Run::Blank
-    } else if char_is_word(c) {
-        Run::Word
-    } else {
-        Run::Other
-    }
-}
-
-fn in_run(c: char, run: Run) -> bool {
-    run_of(c) == run
-}
-
 fn word_run(rope: &Rope, cursor: usize) -> Option<(usize, usize)> {
-    let run = run_of(char_at(rope, cursor)?);
+    let run = class_of(char_at(rope, cursor)?);
     let mut start = cursor;
     while start > 0 {
-        if !in_run(char_at(rope, start - 1)?, run) {
+        if !in_run(char_at(rope, start - 1)?, run, false) {
             break;
         }
         start -= 1;
     }
     let mut end = cursor + 1;
     while let Some(c2) = char_at(rope, end) {
-        if !in_run(c2, run) {
+        if !in_run(c2, run, false) {
             break;
         }
         end += 1;
