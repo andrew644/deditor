@@ -16,6 +16,7 @@ nucleo-matcher = "0.3"
 regex = "1"
 arboard = { version = "3.7", default-features = false, features = ["wayland-data-control"] }
 ignore = "0.4.34"
+git2 = { version = "0.20", default-features = false }
 
 [target.'cfg(unix)'.dependencies]
 winit = { version = "0.30.13", default-features = false, features = ["rwh_06", "wayland", "wayland-dlopen", "wayland-csd-adwaita"] }

@@ -13,6 +13,7 @@ mod app;
 mod buffer;
 mod config;
 mod fuzzy;
+mod git;
 mod keys;
 mod lsp;
 mod mode;
