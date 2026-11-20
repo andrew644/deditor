@@ -325,8 +325,12 @@ impl Editor {
     }
 
     pub fn buffers_removed(&mut self, removed: usize) {
-        for w in self.windows.iter_mut() {
-            w.tabs = w
+        for w in 0..self.windows.len() {
+            let win = &mut self.windows[w];
+            // `cur` is a slot in the tab list, so dropping a tab ahead of the
+            // selected one takes a slot with it; dropping one behind does not.
+            let before = win.tabs[..win.cur.min(win.tabs.len())].contains(&removed);
+            win.tabs = win
                 .tabs
                 .iter()
                 .filter_map(|b| {
@@ -337,14 +341,18 @@ impl Editor {
                     }
                 })
                 .collect();
-            w.cur = w.cur.min(w.tabs.len().saturating_sub(1));
-            if w.tabs.is_empty() {
-                let b = self.buffers.len().saturating_sub(1);
-                if self.buffers.is_empty() {
-                    self.buffers.push(Buffer::empty());
-                }
-                w.tabs.push(b);
-                w.cur = 0;
+            win.cur = if before {
+                win.cur.saturating_sub(1)
+            } else {
+                win.cur
+            }
+            .min(win.tabs.len().saturating_sub(1));
+            if win.tabs.is_empty() {
+                // The buffer this window showed is gone: give it a scratch
+                // buffer rather than stealing a file another window is on.
+                self.buffers.push(Buffer::empty());
+                win.tabs.push(self.buffers.len() - 1);
+                win.cur = 0;
             }
         }
     }
@@ -681,12 +689,12 @@ impl Editor {
     pub fn block_range(&self) -> Option<(usize, usize, usize, usize)> {
         let anchor = self.visual_anchor?;
         let cur = self.buf().cursor;
-        let (a, b) = if (anchor.line, anchor.col) <= (cur.line, cur.col) {
-            (anchor, cur)
-        } else {
-            (cur, anchor)
-        };
-        Some((a.line, b.line, a.col, b.col))
+        Some((
+            anchor.line.min(cur.line),
+            anchor.line.max(cur.line),
+            anchor.col.min(cur.col),
+            anchor.col.max(cur.col),
+        ))
     }
 
     pub fn block_apply(&mut self, op: mode::Operator) {
@@ -803,7 +811,25 @@ impl Editor {
                 b.clamp();
             }
             Op::Change => {
-                self.buf_mut().delete_text(a, b);
+                // A linewise range runs on to the next line's first column, so
+                // it takes the break that holds the line open: put one back so
+                // there is a line to type into, as one undo step. A range that
+                // ends at the end of the text, or that took the break above the
+                // line instead, already leaves an empty line where the text was.
+                let ends_at_eof = self.buf().offset_of(b) >= self.buf().rope.len_chars();
+                let restore =
+                    linewise && a.col == 0 && b.col == 0 && b.line > a.line && !ends_at_eof;
+                if restore {
+                    let text = self
+                        .buf()
+                        .rope
+                        .slice(self.buf().offset_of(a)..self.buf().offset_of(b))
+                        .to_string();
+                    self.buf_mut()
+                        .replace_all(vec![(a, text, "\n".to_string())]);
+                } else {
+                    self.buf_mut().delete_text(a, b);
+                }
                 if linewise {
                     self.buf_mut().cursor = Pos {
                         line: a.line,
@@ -847,23 +873,21 @@ impl Editor {
     fn indent_lines(&mut self, from: usize, to: usize, indent: bool) {
         let tw = self.tab_width();
         let last = self.buf().rope.len_lines().saturating_sub(1);
+        let mut edits = Vec::new();
         for line in from..=to.min(last) {
+            let at = Pos { line, col: 0 };
             if indent {
-                let at = Pos { line, col: 0 };
-                let off = self.buf().offset_of(at);
-                let b = self.buf_mut();
-                b.rope.insert(off, &" ".repeat(tw));
-                b.after_edit();
+                edits.push((at, String::new(), " ".repeat(tw)));
             } else {
                 let line_s = crate::buffer::line_text(&self.buf().rope, line);
                 let n = line_s.chars().take(tw).take_while(|c| *c == ' ').count();
                 if n > 0 {
-                    let b = self.buf_mut();
-                    let off = b.rope.line_to_char(line);
-                    b.rope.remove(off..off + n);
-                    b.after_edit();
+                    edits.push((at, line_s.chars().take(n).collect(), String::new()));
                 }
             }
+        }
+        if !edits.is_empty() {
+            self.buf_mut().replace_all(edits);
         }
     }
 
@@ -896,19 +920,35 @@ impl Editor {
             let segs: Vec<&str> = reg.split('\n').collect();
             let c = self.buf().cursor;
             let col = c.col + if after { 1 } else { 0 };
+            let lines = self.buf().rope.len_lines();
+            let end_line = Pos {
+                line: lines - 1,
+                col: line_chars(&self.buf().rope, lines - 1),
+            };
+            let mut edits = Vec::new();
             for (i, seg) in segs.iter().enumerate() {
                 let line = c.line + i;
-                while line >= self.buf().rope.len_lines() {
-                    let b = self.buf_mut();
-                    b.rope.insert(b.rope.len_chars(), "\n");
-                    b.after_edit();
-                }
-                let len = line_chars(&self.buf().rope, line);
+                let len = if line < lines {
+                    line_chars(&self.buf().rope, line)
+                } else {
+                    0
+                };
                 let pad = " ".repeat(col.saturating_sub(len));
-                let b = self.buf_mut();
-                let off = b.rope.line_to_char(line) + len.min(col);
-                b.rope.insert(off, &format!("{pad}{seg}"));
-                b.after_edit();
+                if line < lines {
+                    edits.push((
+                        Pos {
+                            line,
+                            col: len.min(col),
+                        },
+                        String::new(),
+                        format!("{pad}{seg}"),
+                    ));
+                } else {
+                    edits.push((end_line, String::new(), format!("\n{pad}{seg}")));
+                }
+            }
+            if !edits.is_empty() {
+                self.buf_mut().replace_all(edits);
             }
             let end = segs.last().unwrap_or(&"").chars().count();
             self.buf_mut().cursor = Pos {
@@ -964,16 +1004,20 @@ impl Editor {
             self.buf_mut().cursor = at;
             self.buf_mut().insert_text(&reg, false);
             let mut end_pos = at;
-            let mut it = reg.chars().peekable();
-            while let Some(ch) = it.next() {
-                if it.peek().is_none() {
-                    break;
-                }
-                if ch == '\n' {
-                    end_pos.line += 1;
-                    end_pos.col = 0;
-                } else {
-                    end_pos.col += 1;
+            // `p` leaves the cursor on the last pasted character, `P` on the
+            // first: repeating `P` then stacks copies instead of nesting them.
+            if after {
+                let mut it = reg.chars().peekable();
+                while let Some(ch) = it.next() {
+                    if it.peek().is_none() {
+                        break;
+                    }
+                    if ch == '\n' {
+                        end_pos.line += 1;
+                        end_pos.col = 0;
+                    } else {
+                        end_pos.col += 1;
+                    }
                 }
             }
             self.buf_mut().cursor = end_pos;
@@ -994,29 +1038,51 @@ impl Editor {
 
     pub fn join_lines(&mut self, count: u32) {
         let n = count.max(1) as usize;
-        for _ in 0..n {
-            let line = self.buf().cursor.line;
-            if line + 1 >= self.buf().rope.len_lines() {
+        let line = self.buf().cursor.line;
+        let last = self.buf().rope.len_lines().saturating_sub(1);
+        let mut edits = Vec::new();
+        let mut acc = line_chars(&self.buf().rope, line);
+        let mut col = acc;
+        for k in 1..=n {
+            if line + k > last {
                 break;
             }
-            let len = line_chars(&self.buf().rope, line);
-            let next = crate::buffer::line_text(&self.buf().rope, line + 1);
+            let prev = line + k - 1;
+            let prev_len = line_chars(&self.buf().rope, prev);
+            let next = crate::buffer::line_text(&self.buf().rope, line + k);
             let stripped = next.trim_start();
-            let glue = if len > 0 && !stripped.is_empty() {
+            let skip = next.chars().count() - stripped.chars().count();
+            let glue = if prev_len > 0 && !stripped.is_empty() {
                 " "
             } else {
                 ""
             };
-            let b = self.buf_mut();
-            let s = b.offset_of(Pos { line, col: len });
-            let e = b.offset_of(Pos {
-                line: line + 1,
-                col: next.chars().count() - stripped.chars().count(),
-            });
-            b.rope.remove(s..e);
-            b.rope.insert(s, glue);
-            b.cursor = Pos { line, col: len };
-            b.after_edit();
+            let old = {
+                let b = self.buf();
+                let s = b.offset_of(Pos {
+                    line: prev,
+                    col: prev_len,
+                });
+                let e = b.offset_of(Pos {
+                    line: line + k,
+                    col: skip,
+                });
+                b.rope.slice(s..e).to_string()
+            };
+            edits.push((
+                Pos {
+                    line: prev,
+                    col: prev_len,
+                },
+                old,
+                glue.to_string(),
+            ));
+            col = acc;
+            acc += glue.chars().count() + stripped.chars().count();
+        }
+        if !edits.is_empty() {
+            self.buf_mut().replace_all(edits);
+            self.buf_mut().cursor = Pos { line, col };
         }
         self.buf_mut().clamp();
         self.clear_pending();
@@ -2284,6 +2350,47 @@ mod tests {
         assert_eq!(ed.buffers[1].cursor, Pos { line: 0, col: 0 });
     }
 
+    #[test]
+    fn a_block_selection_spans_the_columns_of_both_ends() {
+        let mut ed = ed_with("alpha\nbeta\ngamma\n");
+        ed.buf_mut().cursor = Pos { line: 0, col: 3 };
+        ed.start_visual_block();
+        ed.run_motion(Motion::LineDown, 1);
+        ed.run_motion(Motion::Zero, 1);
+        assert_eq!(ed.block_range(), Some((0, 1, 0, 3)));
+    }
+
+    #[test]
+    fn closing_a_buffer_keeps_other_windows_on_their_file() {
+        let mut ed = ed_with("a");
+        ed.buffers.push(Buffer::empty());
+        ed.buffers.push(Buffer::empty());
+        ed.buffers[1].insert_text("second", false);
+        ed.split(crate::window::Axis::Columns);
+        ed.windows[0].tabs = vec![0, 1, 2];
+        ed.windows[1].tabs = vec![0, 1, 2];
+        ed.windows[1].cur = 1;
+        let shown = ed.buffers[ed.windows[1].cur_buf()].rope.to_string();
+        ed.buffers.remove(0);
+        ed.buffers_removed(0);
+        assert_eq!(ed.windows[1].tabs, [0, 1]);
+        assert_eq!(ed.buffers[ed.windows[1].cur_buf()].rope.to_string(), shown);
+    }
+
+    #[test]
+    fn closing_the_only_tab_leaves_a_scratch_buffer() {
+        let mut ed = ed_with("a");
+        ed.buffers.push(Buffer::empty());
+        ed.split(crate::window::Axis::Columns);
+        ed.windows[1].tabs = vec![0];
+        ed.windows[1].cur = 0;
+        ed.buffers.remove(0);
+        ed.buffers_removed(0);
+        let scratch = ed.windows[1].cur_buf();
+        assert!(ed.buffers[scratch].path.is_none());
+        assert_ne!(scratch, ed.windows[0].cur_buf());
+    }
+
     fn ed_with(s: &str) -> Editor {
         let mut ed = Editor::test_new();
         ed.buf_mut().insert_text(s, false);
@@ -3514,7 +3621,7 @@ mod tests {
     }
 
     #[test]
-    fn linewise_change_deletes_all_selected_lines() {
+    fn linewise_change_at_the_end_of_the_text_empties_the_buffer() {
         let mut ed = ed_with("one\ntwo\nthree\n");
         ed.config.clipboard = false;
         ed.buf_mut().cursor = Pos { line: 0, col: 0 };
@@ -3522,6 +3629,8 @@ mod tests {
         ed.buf_mut().cursor = Pos { line: 2, col: 0 };
         let ((a, b), lw) = ed.sel_range();
         ed.op_apply(crate::mode::Operator::Change, (a, b), lw);
+        // Deleting through the end of the text leaves nothing behind; there is
+        // no break to put back, so no line is restored.
         assert_eq!(text(&ed), "");
         assert_eq!(ed.mode, Mode::Insert);
         ed.leave_insert();
@@ -3630,7 +3739,11 @@ mod tests {
         ed.buffers.push(Buffer::empty());
         ed.start_visual(false);
         ed.close_buffer(None, true);
-        assert_eq!(ed.buffers.len(), 1);
+        // The closed buffer was the window's only tab, so a scratch buffer
+        // takes its place: the closed one is gone, the window still shows
+        // something unnamed.
+        assert_eq!(ed.buffers.len(), 2);
+        assert!(ed.buf().path.is_none());
         assert!(ed.spell.spans.is_empty());
         assert!(ed.lsp.hover.is_none());
         assert!(ed.lsp.completion.is_none());

@@ -436,30 +436,37 @@ fn normal_key(ed: &mut Editor, key: &Key, mods: ModifiersState) {
             }
         }
         "n" => {
+            ed.count = 0;
             ed.repeat_search(false);
             return;
         }
         "N" => {
+            ed.count = 0;
             ed.repeat_search(true);
             return;
         }
         "*" => {
+            ed.count = 0;
             ed.search_cur_word(false);
             return;
         }
         "#" => {
+            ed.count = 0;
             ed.search_cur_word(true);
             return;
         }
         ":" => {
+            ed.count = 0;
             ed.open_cmdline(crate::mode::CmdKind::Ex);
             return;
         }
         "/" => {
+            ed.count = 0;
             ed.open_cmdline(crate::mode::CmdKind::Search);
             return;
         }
         "?" => {
+            ed.count = 0;
             ed.open_cmdline(crate::mode::CmdKind::SearchBack);
             return;
         }
@@ -606,7 +613,9 @@ fn visual_key(ed: &mut Editor, k: &str, count: u32) {
             ed.register = reg;
             ed.reg_linewise = lw;
             ed.reg_block = blk;
-            ed.paste(true);
+            // The selection is gone and the cursor sits where it started, so
+            // the register goes in there rather than after it.
+            ed.paste(false);
         }
         _ => {}
     }
@@ -1762,6 +1771,128 @@ mod tests {
             &[Key::Character("3".into()), Key::Character("p".into())],
         );
         assert_eq!(ed.buf().rope.to_string(), "axxxbcd\n");
+    }
+
+    fn press(ed: &mut Editor, s: &str) {
+        for c in s.chars() {
+            let mut buf = [0u8; 4];
+            type_keys(ed, &[Key::Character(c.encode_utf8(&mut buf).into())]);
+        }
+    }
+
+    fn esc(ed: &mut Editor) {
+        type_keys(ed, &[Key::Named(NamedKey::Escape)]);
+    }
+
+    #[test]
+    fn change_line_in_the_middle_keeps_the_line() {
+        let mut ed = Editor::test_new();
+        ed.config.clipboard = false;
+        ed.buf_mut().insert_text("keep\ndrop\nmore\n", false);
+        ed.buf_mut().cursor = Pos { line: 1, col: 2 };
+        press(&mut ed, "cc");
+        press(&mut ed, "X");
+        esc(&mut ed);
+        assert_eq!(ed.buf().rope.to_string(), "keep\nX\nmore\n");
+    }
+
+    #[test]
+    fn linewise_paste_repeats_whole_lines() {
+        let mut ed = Editor::test_new();
+        ed.config.clipboard = false;
+        ed.buf_mut().insert_text("x\n", false);
+        ed.buf_mut().cursor = Pos { line: 0, col: 0 };
+        ed.register = "L\n".into();
+        ed.reg_linewise = true;
+        press(&mut ed, "2p");
+        assert_eq!(ed.buf().rope.to_string(), "x\nL\nL\n");
+    }
+
+    #[test]
+    fn charwise_paste_before_repeats_in_order() {
+        let mut ed = Editor::test_new();
+        ed.config.clipboard = false;
+        ed.buf_mut().insert_text("abcd\n", false);
+        ed.buf_mut().cursor = Pos { line: 0, col: 0 };
+        ed.register = "XY".into();
+        press(&mut ed, "2P");
+        assert_eq!(ed.buf().rope.to_string(), "XYXYabcd\n");
+    }
+
+    #[test]
+    fn visual_paste_replaces_the_selection() {
+        let mut ed = Editor::test_new();
+        ed.config.clipboard = false;
+        ed.buf_mut().insert_text("hello world", false);
+        ed.buf_mut().cursor = Pos { line: 0, col: 0 };
+        ed.register = "XY".into();
+        press(&mut ed, "vll");
+        press(&mut ed, "p");
+        assert_eq!(ed.buf().rope.to_string(), "XYlo world");
+    }
+
+    #[test]
+    fn visual_line_paste_replaces_the_line() {
+        let mut ed = Editor::test_new();
+        ed.config.clipboard = false;
+        ed.buf_mut().insert_text("a\nb\nc\n", false);
+        ed.buf_mut().cursor = Pos { line: 1, col: 0 };
+        ed.register = "X\n".into();
+        ed.reg_linewise = true;
+        press(&mut ed, "Vp");
+        assert_eq!(ed.buf().rope.to_string(), "a\nX\nc\n");
+    }
+
+    #[test]
+    fn joining_lines_can_be_undone() {
+        let mut ed = Editor::test_new();
+        ed.config.clipboard = false;
+        ed.buf_mut().insert_text("aaa\nbbb\nccc\nddd\n", false);
+        ed.buf_mut().cursor = Pos { line: 0, col: 0 };
+        press(&mut ed, "2J");
+        assert_eq!(ed.buf().rope.to_string(), "aaa bbb ccc\nddd\n");
+        press(&mut ed, "u");
+        assert_eq!(ed.buf().rope.to_string(), "aaa\nbbb\nccc\nddd\n");
+    }
+
+    #[test]
+    fn indenting_a_line_can_be_undone() {
+        let mut ed = Editor::test_new();
+        ed.config.clipboard = false;
+        ed.buf_mut().insert_text("hello\n", false);
+        ed.buf_mut().cursor = Pos { line: 0, col: 0 };
+        press(&mut ed, ">>");
+        press(&mut ed, "u");
+        assert_eq!(ed.buf().rope.to_string(), "hello\n");
+    }
+
+    #[test]
+    fn two_insert_sessions_undo_separately() {
+        let mut ed = Editor::test_new();
+        ed.config.clipboard = false;
+        ed.buf_mut().insert_text("ab\n", false);
+        ed.buf_mut().cursor = Pos { line: 0, col: 0 };
+        press(&mut ed, "i");
+        press(&mut ed, "xx");
+        esc(&mut ed);
+        press(&mut ed, "Ay");
+        esc(&mut ed);
+        assert_eq!(ed.buf().rope.to_string(), "xxaby\n");
+        press(&mut ed, "u");
+        assert_eq!(ed.buf().rope.to_string(), "xxab\n");
+    }
+
+    #[test]
+    fn a_count_before_n_does_not_leak_into_the_next_command() {
+        let mut ed = Editor::test_new();
+        ed.config.clipboard = false;
+        ed.buf_mut().insert_text("one two three one", false);
+        ed.buf_mut().cursor = Pos { line: 0, col: 0 };
+        ed.search = Some("one".into());
+        press(&mut ed, "3n");
+        assert_eq!(ed.count, 0);
+        press(&mut ed, "x");
+        assert_eq!(ed.buf().rope.to_string(), "one two three ne");
     }
 
     #[test]
