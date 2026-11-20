@@ -108,6 +108,33 @@ fn code_part(text: &str) -> &str {
     text.trim_end()
 }
 
+/// The absolute location a buffer reads and writes. Resolving it when the
+/// buffer is created keeps a later `:pwd` from pointing a save at a different
+/// file, and gives the LSP client one key to address the document by.
+fn own_path(path: &Path) -> PathBuf {
+    if let Ok(real) = path.canonicalize() {
+        return real;
+    }
+    let parent = match path.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p,
+        _ => Path::new("."),
+    };
+    match (parent.canonicalize(), path.file_name()) {
+        (Ok(dir), Some(name)) => dir.join(name),
+        _ => path.to_path_buf(),
+    }
+}
+
+/// Name of the scratch file a save is staged through before it replaces the
+/// real one, so an interrupted write never leaves the file truncated.
+fn staged_name(path: &Path) -> PathBuf {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "buffer".into());
+    path.with_file_name(format!(".{name}.{}.deditor-tmp", std::process::id()))
+}
+
 impl Buffer {
     pub fn empty() -> Self {
         Self {
@@ -131,15 +158,16 @@ impl Buffer {
     }
 
     pub fn load(path: &Path) -> crate::Result<Self> {
-        let bytes = fs::read(path).map_err(|e| format!("open {}: {e}", path.display()))?;
+        let path = own_path(path);
+        let bytes = fs::read(&path).map_err(|e| format!("open {}: {e}", path.display()))?;
         let text = String::from_utf8(bytes)
             .map_err(|_| format!("open {}: not valid UTF-8", path.display()))?;
         let crlf = text.contains("\r\n");
         let text = text.replace("\r\n", "\n");
         let rope = Rope::from_str(&text);
         Ok(Self {
-            path: Some(path.to_path_buf()),
-            disk_time: Self::stamp(Some(path)),
+            disk_time: Self::stamp(Some(&path)),
+            path: Some(path),
             saved: rope.clone(),
             rope,
             crlf,
@@ -148,9 +176,10 @@ impl Buffer {
     }
 
     pub fn new_file(path: &Path) -> Self {
+        let path = own_path(path);
         Self {
-            path: Some(path.to_path_buf()),
-            disk_time: Self::stamp(Some(path)),
+            disk_time: Self::stamp(Some(&path)),
+            path: Some(path),
             ..Self::empty()
         }
     }
@@ -166,8 +195,20 @@ impl Buffer {
         if self.crlf {
             text = text.replace('\n', "\r\n");
         }
-        fs::write(path, text).map_err(|e| format!("write {}: {e}", path.display()))?;
-        Ok(())
+        let staged = staged_name(path);
+        let stage_and_move = || -> crate::Result<()> {
+            fs::write(&staged, &text).map_err(|e| format!("write {}: {e}", path.display()))?;
+            if let Ok(meta) = fs::metadata(path) {
+                let _ = fs::set_permissions(&staged, meta.permissions());
+            }
+            fs::rename(&staged, path).map_err(|e| format!("write {}: {e}", path.display()))?;
+            Ok(())
+        };
+        let written = stage_and_move();
+        if written.is_err() {
+            let _ = fs::remove_file(&staged);
+        }
+        written
     }
 
     pub fn display_name(&self) -> String {
@@ -228,9 +269,11 @@ impl Buffer {
     pub fn after_edit(&mut self) {
         self.revision += 1;
         self.redo.clear();
-        self.refresh_dirty();
+        self.dirty = true;
     }
 
+    /// Compares the text with the version on disk. Only undo and redo need it:
+    /// they can bring the document back to exactly what was saved.
     pub fn refresh_dirty(&mut self) {
         self.dirty = self.rope != self.saved;
     }
@@ -451,6 +494,54 @@ mod tests {
         b.undo();
         assert!(b.dirty);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn saving_leaves_only_the_file_behind() {
+        let dir = std::env::temp_dir().join(format!("deditor_atomic_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("a.txt");
+        std::fs::write(&f, "old\n").unwrap();
+        let mut b = Buffer::load(&f).unwrap();
+        b.insert_text("new ", false);
+        b.save().unwrap();
+        assert_eq!(std::fs::read_to_string(&f).unwrap(), "new old\n");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_buffer_owns_the_real_file_behind_a_link() {
+        let dir = std::env::temp_dir().join(format!("deditor_link_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let real = dir.join("real.txt");
+        std::fs::write(&real, "x\n").unwrap();
+        let link = dir.join("link.txt");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let b = Buffer::load(&link).unwrap();
+        assert_eq!(b.path.as_deref(), Some(real.as_path()));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_new_file_is_addressed_absolutely() {
+        let b = Buffer::new_file(Path::new("Cargo.toml"));
+        assert!(b.path.as_ref().is_some_and(|p| p.is_absolute()));
+    }
+
+    #[test]
+    fn an_edit_of_the_same_length_marks_the_buffer_dirty() {
+        let mut b = Buffer::empty();
+        b.insert_text("ab\n", false);
+        b.mark_saved();
+        b.cursor = Pos { line: 0, col: 0 };
+        b.delete_text(Pos { line: 0, col: 0 }, Pos { line: 0, col: 1 });
+        b.insert_text("c", false);
+        assert!(b.dirty, "an edit that keeps the length is still an edit");
+        b.undo();
+        b.undo();
+        assert!(!b.dirty, "undoing back to the saved text clears the flag");
     }
 
     #[test]

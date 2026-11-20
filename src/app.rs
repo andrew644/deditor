@@ -191,9 +191,7 @@ impl Editor {
             match Buffer::load(p) {
                 Ok(b) => ed.buffers[0] = b,
                 Err(e) => {
-                    let mut b = Buffer::empty();
-                    b.path = Some(p.to_path_buf());
-                    ed.buffers[0] = b;
+                    ed.buffers[0] = Buffer::new_file(p);
                     ed.status = Some(e.to_string());
                     ed.status_err = true;
                 }
