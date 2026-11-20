@@ -113,7 +113,7 @@ impl Default for FontCfg {
     fn default() -> Self {
         Self {
             family: "MesloLGMDZ Nerd Font Mono".into(),
-            size: 14.0,
+            size: 18.0,
         }
     }
 }
@@ -218,7 +218,7 @@ fn hex_checked(raw: &str, name: &str, def: u32, warnings: &mut Vec<String>) -> u
     }
 }
 
-pub const FONT_SIZES: [f32; 6] = [10.0, 12.0, 14.0, 16.0, 20.0, 24.0];
+pub const FONT_SIZES: [f32; 7] = [10.0, 12.0, 14.0, 16.0, 18.0, 20.0, 24.0];
 pub const TAB_WIDTHS: [u32; 3] = [2, 4, 8];
 pub const FONT_FAMILIES: [&str; 5] = [
     "MesloLGMDZ Nerd Font Mono",
@@ -371,6 +371,7 @@ mod tests {
         setting_activate(&mut c, "clipboard");
         assert!(!c.clipboard);
         assert!(SETTINGS.contains(&"clipboard"));
+        c.font.size = 14.0;
         setting_activate(&mut c, "font.size");
         assert_eq!(c.font.size, 16.0);
         setting_activate(&mut c, "theme.accent");
@@ -380,12 +381,17 @@ mod tests {
     }
 
     #[test]
-    fn family_cycle_starts_at_the_default() {
+    fn defaults_are_in_their_cycle_lists() {
         let default = Config::default();
         assert!(FONT_FAMILIES.contains(&default.font.family.as_str()));
+        assert!(FONT_SIZES.contains(&default.font.size));
+        assert!(TAB_WIDTHS.contains(&default.tab_width));
         let mut c = default.clone();
-        setting_activate(&mut c, "font.family");
-        assert_ne!(c.font.family, default.font.family);
+        for key in ["font.family", "font.size", "tab_width"].as_slice() {
+            let before = setting_value(&c, key);
+            setting_activate(&mut c, key);
+            assert_ne!(setting_value(&c, key), before, "{key} is stuck");
+        }
     }
 
     #[test]
