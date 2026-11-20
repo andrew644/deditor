@@ -2,7 +2,6 @@
 - Add tab completion for :e and :pwd. Show a list like ctrl-p while the user types. The list should be next to the command line at the bottom.
 - Fuzzy search with ctrl-p should include sub directories recursively. Currently, the user needs to select the directory for it's items to be searchable. The user should still be able to select a sub-directory, and that will still filter the results. They should also still be able to change the pwd source directory by typing with ctrl-p.
 - git ignored files won't show in ctrl-p unless a toggle f5 is pressed.
-- On windows - lsp opens the process in a powershell window. This shouldn't happen. Use the creation flag: const CREATE_NO_WINDOW: u32 = 0x08000000;
 - Arrow keys should work in all modes for cursor navigation.
 - Add :split :vsplit :hsplit to split the view. :split and :vsplit will virtically split the viewer into left and right. :hsplit horizontal split. Swap windows with ctrl-w w like neovim. Show separate tab views in each split.
 - Use tokyo night theme as default. You can reference ~/dotfiles/kitty/current-theme.conf for the color values.
