@@ -67,7 +67,7 @@ fn main() -> Result<()> {
         pointer_tab: false,
         last_mouse: None,
         win_rects: Vec::new(),
-        text_sig: ("monospace".into(), 14.0),
+        text_sig: (String::new(), 0.0),
         proxy: Some(event_loop.create_proxy()),
         pump_armed: false,
         close_warned: false,
@@ -125,11 +125,12 @@ impl ApplicationHandler for App {
             }
         };
         let format = gpu.config.format;
+        let default_font = config::FontCfg::default();
         let (font_family, font_size) = self
             .editor
             .as_ref()
             .map(|e| (e.config.font.family.clone(), e.config.font.size))
-            .unwrap_or_else(|| ("monospace".into(), 14.0));
+            .unwrap_or((default_font.family, default_font.size));
         let text = TextSystem::new(
             &gpu.device,
             &gpu.queue,

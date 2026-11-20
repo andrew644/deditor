@@ -3,7 +3,7 @@
 # All keys are optional; anything missing falls back to the default shown here.
 
 font:
-  family: monospace
+  family: MesloLGMDZ Nerd Font Mono
   size: 14.0
 
 tab_width: 4

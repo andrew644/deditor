@@ -261,6 +261,10 @@ dictionary does not know — no external program or dictionary package is needed
 Point `spell_dict` at a personal word list to whitelist project names and
 jargon.
 
+The default font is `MesloLGMDZ Nerd Font Mono`. `:settings` cycles
+`font.family` through a short list; a family fontconfig cannot find falls back
+to the system monospace face.
+
 Text sits on a fixed cell grid and a wide character (CJK, Hangul, most emoji)
 occupies two cells. Whether it actually fills both depends on the fallback font
 the shaper picks for it: cosmic-text falls back to `Noto Sans CJK`, whose

@@ -1,5 +1,4 @@
 # TODO
-- Make the default font "MesloLGDZ Nerd Font Mono"
 - Make default font size 18
 - Make home and end work like 0 and $.
 - Swap the hotkeys for f4 and f5.

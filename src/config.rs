@@ -112,7 +112,7 @@ pub struct FontCfg {
 impl Default for FontCfg {
     fn default() -> Self {
         Self {
-            family: "monospace".into(),
+            family: "MesloLGMDZ Nerd Font Mono".into(),
             size: 14.0,
         }
     }
@@ -220,7 +220,8 @@ fn hex_checked(raw: &str, name: &str, def: u32, warnings: &mut Vec<String>) -> u
 
 pub const FONT_SIZES: [f32; 6] = [10.0, 12.0, 14.0, 16.0, 20.0, 24.0];
 pub const TAB_WIDTHS: [u32; 3] = [2, 4, 8];
-pub const FONT_FAMILIES: [&str; 4] = [
+pub const FONT_FAMILIES: [&str; 5] = [
+    "MesloLGMDZ Nerd Font Mono",
     "monospace",
     "DejaVu Sans Mono",
     "JetBrains Mono",
@@ -376,6 +377,15 @@ mod tests {
         assert!(parse_hex(&c.theme.accent).is_some());
         assert_ne!(c.theme.accent, Theme::default().accent);
         assert_eq!(setting_value(&c, "tab_width"), "4");
+    }
+
+    #[test]
+    fn family_cycle_starts_at_the_default() {
+        let default = Config::default();
+        assert!(FONT_FAMILIES.contains(&default.font.family.as_str()));
+        let mut c = default.clone();
+        setting_activate(&mut c, "font.family");
+        assert_ne!(c.font.family, default.font.family);
     }
 
     #[test]
