@@ -12,20 +12,20 @@ pub fn parse_hex(s: &str) -> Option<u32> {
 macro_rules! for_each_theme_color {
     ($mac:ident) => {
         $mac! {
-            [fg, "#d8d8da", 0xFFD8D8DA],
-            [bg, "#1c1c20", 0xFF1C1C20],
-            [gutter_fg, "#6a6a72", 0xFF6A6A72],
-            [selection, "#3a3d4a", 0xFF3A3D4A],
-            [cursorline, "#2a2b33", 0xFF2A2B33],
-            [tab_active, "#2f3240", 0xFF2F3240],
-            [tab_inactive, "#22232a", 0xFF22232A],
-            [status_bg, "#2a2b33", 0xFF2A2B33],
-            [accent, "#7aa2f7", 0xFF7AA2F7],
-            [error, "#f7768e", 0xFFF7768E],
-            [warn, "#e0af68", 0xFFE0AF68],
-            [popup_bg, "#26262e", 0xFF26262E],
-            [popup_fg, "#d8d8da", 0xFFD8D8DA],
-            [popup_sel, "#3f4a5f", 0xFF3F4A5F]
+            [fg, "#c8d3f5", 0xFFC8D3F5],
+            [bg, "#222436", 0xFF222436],
+            [gutter_fg, "#545c7e", 0xFF545C7E],
+            [selection, "#2d3f76", 0xFF2D3F76],
+            [cursorline, "#2f334d", 0xFF2F334D],
+            [tab_active, "#3b4261", 0xFF3B4261],
+            [tab_inactive, "#1e2030", 0xFF1E2030],
+            [status_bg, "#1e2030", 0xFF1E2030],
+            [accent, "#82aaff", 0xFF82AAFF],
+            [error, "#ff757f", 0xFFFF757F],
+            [warn, "#ffc777", 0xFFFFC777],
+            [popup_bg, "#262a3f", 0xFF262A3F],
+            [popup_fg, "#c8d3f5", 0xFFC8D3F5],
+            [popup_sel, "#2d3f76", 0xFF2D3F76]
         }
     };
 }
@@ -53,11 +53,6 @@ fn flip_hex(s: &str) -> String {
         return s.to_string();
     };
     let (r, g, b) = ((v >> 16) & 0xFF, (v >> 8) & 0xFF, v & 0xFF);
-    let mx = r.max(g).max(b);
-    let mn = r.min(g).min(b);
-    if mx - mn > 32 {
-        return s.to_string();
-    }
     let v = (255 - r) << 16 | (255 - g) << 8 | (255 - b);
     format!("#{v:06x}")
 }
@@ -68,9 +63,12 @@ macro_rules! theme_functions {
             $(pub $n: u32,)*
         }
 
-        /// Mirrors every near-neutral color around mid gray so the palette swaps
-        /// between dark and light. Saturated accents keep their identity, and the
-        /// transform is its own inverse.
+        pub const PALETTE: [&'static str; 14] = [
+            $($h,)*
+        ];
+
+        /// Inverts every channel so the palette swaps between dark and light. Hues
+        /// rotate but keep their contrast, and the transform is its own inverse.
         pub fn flip_lightness(t: &Theme) -> Theme {
             Theme { $($n: flip_hex(&t.$n),)* }
         }
@@ -225,10 +223,6 @@ pub const FONT_FAMILIES: [&str; 4] = [
     "JetBrains Mono",
     "Fira Code",
 ];
-pub const PALETTE: [&str; 12] = [
-    "#d8d8da", "#1c1c20", "#6a6a72", "#3a3d4a", "#2f3240", "#22232a", "#2a2b33", "#7aa2f7",
-    "#f7768e", "#e0af68", "#26262e", "#3f4a5f",
-];
 
 macro_rules! theme_settings {
     ($([$n:ident, $h:literal, $r:literal]),*) => {
@@ -317,7 +311,7 @@ mod tests {
             ..Theme::default()
         };
         let (rgb, w) = RgbTheme::from_theme_checked(&t);
-        assert_eq!(rgb.fg, 0xFFD8D8DA);
+        assert_eq!(rgb.fg, 0xFFC8D3F5);
         assert_eq!(w.len(), 1);
         assert!(w[0].contains("theme.fg"));
     }
@@ -325,7 +319,7 @@ mod tests {
     #[test]
     fn cursorline_is_editable_and_checked() {
         let mut c = Config::default();
-        assert_eq!(setting_value(&c, "theme.cursorline"), "#2a2b33");
+        assert_eq!(setting_value(&c, "theme.cursorline"), "#2f334d");
         assert!(SETTINGS.contains(&"theme.cursorline"));
         setting_activate(&mut c, "theme.cursorline");
         assert_ne!(c.theme.cursorline, Theme::default().cursorline);
@@ -340,7 +334,7 @@ mod tests {
             ..Theme::default()
         };
         let (rgb, w) = RgbTheme::from_theme_checked(&bad);
-        assert_eq!(rgb.cursorline, 0xFF2A2B33);
+        assert_eq!(rgb.cursorline, 0xFF2F334D);
         assert_eq!(w.len(), 1);
         assert!(w[0].contains("theme.cursorline"));
     }
@@ -412,23 +406,22 @@ mod tests {
     fn lightness_flip_swaps_dark_and_light_exactly() {
         let dark = Theme::default();
         let light = flip_lightness(&dark);
-        assert_eq!(light.bg, "#e3e3df");
-        assert_eq!(light.fg, "#272725");
+        assert_eq!(light.bg, "#dddbc9");
+        assert_eq!(light.fg, "#372c0a");
         let lum = |s: &str| {
             let v = parse_hex(s).unwrap();
             ((v >> 16) & 0xFF) + ((v >> 8) & 0xFF) + (v & 0xFF)
         };
         assert!(lum(&light.bg) > lum(&light.fg));
-        assert_eq!(light.accent, dark.accent);
-        assert_eq!(light.error, dark.error);
-        assert_eq!(light.warn, dark.warn);
+        assert!(lum(&dark.bg) < lum(&dark.fg));
+        assert!(lum(&light.accent) < lum(&light.bg));
         assert_eq!(flip_lightness(&light), dark);
     }
 
     #[test]
-    fn flip_hex_keeps_saturated_and_broken_colors() {
-        assert_eq!(flip_hex("#7aa2f7"), "#7aa2f7");
-        assert_eq!(flip_hex("#3a3d4a"), "#c5c2b5");
+    fn flip_hex_inverts_every_channel() {
+        assert_eq!(flip_hex("#82aaff"), "#7d5500");
+        assert_eq!(flip_hex("#222436"), "#dddbc9");
         assert_eq!(flip_hex("nonsense"), "nonsense");
         assert_eq!(flip_hex("#12"), "#12");
     }
