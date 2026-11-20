@@ -1,5 +1,6 @@
 use git2::{DiffOptions, Repository};
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::path::Path;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -196,25 +197,36 @@ fn blamed(path: &Path, text: &str) -> Option<Vec<BlameLine>> {
     let committed = repo.blame_file(rel, None).ok()?;
     let blame = committed.blame_buffer(text.as_bytes()).ok()?;
     let mut out = vec![BlameLine::default(); text.lines().count().max(1)];
+    let mut by_commit: HashMap<git2::Oid, BlameLine> = HashMap::new();
     for h in blame.iter() {
-        if h.final_commit_id().is_zero() {
+        let id = h.final_commit_id();
+        if id.is_zero() {
             continue;
         }
-        let sig = h.final_signature();
-        let when = sig.when();
-        let who = sig.name().unwrap_or_default().to_string();
-        let when = date(when.seconds() as i64, when.offset_minutes());
         let first = h.final_start_line().saturating_sub(1);
+        // Hunks that a buffer blame carries over from the file blame have no
+        // signature of their own, so the author comes from the commit itself.
+        let entry = by_commit.entry(id).or_insert_with(|| author(&repo, id));
         for row in first..first + h.lines_in_hunk() {
             if let Some(slot) = out.get_mut(row) {
-                *slot = BlameLine {
-                    when: when.clone(),
-                    who: who.clone(),
-                };
+                *slot = entry.clone();
             }
         }
     }
     Some(out)
+}
+
+/// Who wrote a commit, or an empty entry if the object cannot be read.
+fn author(repo: &Repository, id: git2::Oid) -> BlameLine {
+    let Ok(commit) = repo.find_commit(id) else {
+        return BlameLine::default();
+    };
+    let sig = commit.author();
+    let when = sig.when();
+    BlameLine {
+        who: sig.name().unwrap_or_default().to_string(),
+        when: date(when.seconds(), when.offset_minutes()),
+    }
 }
 
 /// Calendar date of a commit timestamp, in the committing author's time zone.

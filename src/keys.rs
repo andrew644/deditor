@@ -35,6 +35,10 @@ pub(crate) fn key_down(ed: &mut Editor, key: &Key, mods: ModifiersState) {
         );
         return;
     }
+    if *key == Key::Named(NamedKey::F4) {
+        ed.toggle_blame();
+        return;
+    }
     if *key == Key::Named(NamedKey::F3) {
         ed.config.theme = crate::config::flip_lightness(&ed.config.theme);
         let (theme, warns) = crate::config::RgbTheme::from_theme_checked(&ed.config.theme);
@@ -1467,6 +1471,18 @@ mod tests {
         type_keys(&mut ed, &[Key::Named(NamedKey::F5)]);
         assert!(!ed.show_ignored);
         assert_eq!(ed.status.as_deref(), Some("ignored files: hidden"));
+    }
+
+    #[test]
+    fn f4_toggles_git_blame() {
+        let mut ed = Editor::test_new();
+        assert!(!ed.show_blame);
+        type_keys(&mut ed, &[Key::Named(NamedKey::F4)]);
+        assert!(ed.show_blame);
+        assert_eq!(ed.status.as_deref(), Some("git blame: on"));
+        type_keys(&mut ed, &[Key::Named(NamedKey::F4)]);
+        assert!(!ed.show_blame);
+        assert_eq!(ed.status.as_deref(), Some("git blame: off"));
     }
 
     #[test]

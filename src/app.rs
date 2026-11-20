@@ -73,6 +73,7 @@ pub struct Editor {
     pub panel_cursor: usize,
     pub panel_root: String,
     pub show_ignored: bool,
+    pub show_blame: bool,
     pub completions: Option<Completions>,
     pub lsp: crate::lsp::LspManager,
     pub context_menu: Option<String>,
@@ -180,6 +181,7 @@ impl Editor {
             panel_cursor: 0,
             panel_root: String::new(),
             show_ignored: false,
+            show_blame: false,
             completions: None,
             lsp: crate::lsp::LspManager::new(),
             context_menu: None,
@@ -534,24 +536,38 @@ impl Editor {
         }
     }
 
-    pub fn refresh_signs(&mut self) {
+    /// Recomputes the gutter marks of the visible buffers. Insert mode is
+    /// skipped so that typing never pays for a diff or a blame.
+    pub fn refresh_marks(&mut self) {
         if self.mode == Mode::Insert {
             return;
         }
+        let want_blame = self.show_blame;
         let mut seen: Vec<usize> = Vec::new();
         for w in &self.windows {
             let b = w.cur_buf();
-            if seen.contains(&b) || self.buffers[b].sign_rev == self.buffers[b].revision {
+            if seen.contains(&b) {
                 continue;
             }
             seen.push(b);
-            let enabled = self.config.git_signs;
-            let path = self.buffers[b].path.clone();
             let buf = &mut self.buffers[b];
-            buf.sign_rev = buf.revision;
-            buf.signs = match (&path, enabled) {
-                (Some(p), true) => crate::git::changes(p, &buf.rope.to_string()),
-                _ => Vec::new(),
+            if buf.sign_rev != buf.revision {
+                let path = buf.path.clone();
+                let enabled = self.config.git_signs;
+                buf.sign_rev = buf.revision;
+                buf.signs = match (&path, enabled) {
+                    (Some(p), true) => crate::git::changes(p, &buf.rope.to_string()),
+                    _ => Vec::new(),
+                };
+            }
+            if !want_blame || buf.blame_rev == buf.revision {
+                continue;
+            }
+            let path = buf.path.clone();
+            buf.blame_rev = buf.revision;
+            buf.blame = match &path {
+                Some(p) => crate::git::blame(p, &buf.rope.to_string()),
+                None => Vec::new(),
             };
         }
     }
@@ -562,6 +578,19 @@ impl Editor {
                 .signs
                 .iter()
                 .any(|s| *s != crate::git::Sign::None)
+    }
+
+    /// Shows or hides the author column; the marks are dropped so the next
+    /// draw re-blames whatever is visible.
+    pub fn toggle_blame(&mut self) {
+        self.show_blame = !self.show_blame;
+        if self.show_blame {
+            for b in &mut self.buffers {
+                b.blame_rev = u64::MAX;
+            }
+        }
+        let state = if self.show_blame { "on" } else { "off" };
+        self.set_status(format!("git blame: {state}"), false);
     }
 
     pub fn center_cursor(&mut self, rows: usize) {
@@ -2246,13 +2275,13 @@ mod tests {
     fn signs_wait_until_insert_ends() {
         let (mut ed, _) = editor_on("typing");
         ed.mode = Mode::Insert;
-        ed.refresh_signs();
+        ed.refresh_marks();
         assert!(
             ed.buffers[0].signs.is_empty(),
             "the diff must not run on every keystroke"
         );
         ed.mode = Mode::Normal;
-        ed.refresh_signs();
+        ed.refresh_marks();
         assert_eq!(
             ed.buffers[0].signs,
             vec![
@@ -2266,13 +2295,47 @@ mod tests {
     }
 
     #[test]
+    fn blame_is_only_computed_while_it_is_shown() {
+        let (mut ed, _) = editor_on("blamehidden");
+        ed.refresh_marks();
+        assert!(
+            ed.buffers[0].blame.is_empty(),
+            "a hidden author column must not cost a blame"
+        );
+        ed.show_blame = true;
+        ed.refresh_marks();
+        assert_eq!(ed.buffers[0].blame.len(), 4);
+        assert_eq!(ed.buffers[0].blame[0].who, "t");
+        assert_eq!(ed.buffers[0].blame[1], crate::git::BlameLine::default());
+        assert!(
+            ed.buffers[0].blame[2..].iter().all(|b| b.who == "t"),
+            "hunks a buffer blame carries over from the file must keep their author"
+        );
+    }
+
+    #[test]
+    fn toggling_blame_reblames_the_buffer() {
+        let (mut ed, _) = editor_on("blametoggle");
+        ed.toggle_blame();
+        ed.refresh_marks();
+        assert_eq!(ed.status.as_deref(), Some("git blame: on"));
+        assert_eq!(ed.buffers[0].blame[0].who, "t");
+        ed.buf_mut().insert_text("more\n", false);
+        ed.refresh_marks();
+        assert_eq!(ed.buffers[0].blame.len(), 5);
+        ed.toggle_blame();
+        assert_eq!(ed.status.as_deref(), Some("git blame: off"));
+        assert!(!ed.show_blame);
+    }
+
+    #[test]
     fn disabling_signs_clears_the_gutter() {
         let (mut ed, _) = editor_on("off");
-        ed.refresh_signs();
+        ed.refresh_marks();
         assert!(ed.has_signs(0));
         ed.config.git_signs = false;
         ed.buffers[0].sign_rev = u64::MAX;
-        ed.refresh_signs();
+        ed.refresh_marks();
         assert!(ed.buffers[0].signs.is_empty());
         assert!(!ed.has_signs(0));
     }
@@ -2281,7 +2344,7 @@ mod tests {
     fn buffer_without_a_file_has_no_signs() {
         let mut ed = Editor::test_new();
         ed.buf_mut().insert_text("hello\n", false);
-        ed.refresh_signs();
+        ed.refresh_marks();
         assert!(ed.buffers[0].signs.is_empty());
         assert!(!ed.has_signs(0));
     }

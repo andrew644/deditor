@@ -234,6 +234,18 @@ pub fn gutter_for(b: &crate::buffer::Buffer, line_numbers: bool, signs: bool) ->
     numbers + if signs { 2 } else { 0 }
 }
 
+/// Width of the `date author` column that `F4` puts left of the line numbers.
+pub const BLAME_W: usize = 22;
+
+fn blame_text(e: Option<&crate::git::BlameLine>, w: usize) -> String {
+    let Some(e) = e.filter(|e| !e.who.is_empty()) else {
+        return " ".repeat(w);
+    };
+    let name = w.saturating_sub(12);
+    let who: String = e.who.chars().take(name).collect();
+    format!("{:>10} {:<name$} ", e.when, who, name = name)
+}
+
 pub struct TabHit {
     pub x0: f32,
     pub x1: f32,
@@ -286,11 +298,12 @@ impl Layout {
             .into_iter()
             .filter_map(|(win, r)| {
                 let w = ed.windows.get(win)?;
-                let gutter = gutter_for(
-                    &ed.buffers[w.cur_buf()],
-                    ed.config.line_numbers,
-                    ed.has_signs(w.cur_buf()),
-                );
+                let gutter = u32::try_from(usize::from(ed.show_blame) * BLAME_W).unwrap()
+                    + gutter_for(
+                        &ed.buffers[w.cur_buf()],
+                        ed.config.line_numbers,
+                        ed.has_signs(w.cur_buf()),
+                    );
                 Some(WinRect {
                     win,
                     x: r.x,
@@ -350,6 +363,7 @@ pub fn draw_content(
         bw: f32,
         bh: f32,
         gutter_cols: u32,
+        blame_cols: u32,
         focused: bool,
     }
     let mut strips: Vec<Strip> = Vec::new();
@@ -550,14 +564,16 @@ pub fn draw_content(
         let mut gutter_s = String::new();
         let mut body_s = String::new();
         let mut sign_s = [String::new(), String::new(), String::new()];
+        let blame_w = usize::from(ed.show_blame) * BLAME_W;
         let sign_w = 2 * usize::from(ed.has_signs(win.cur_buf()));
-        let num_w = gutter.saturating_sub(sign_w);
+        let num_w = gutter.saturating_sub(sign_w).saturating_sub(blame_w).max(1);
         for (r, row) in rows.iter().enumerate() {
             if row.line < buf.rope.len_lines() {
                 if wr.gutter > 0 {
                     if row.first() {
+                        gutter_s.push_str(&blame_text(buf.blame.get(row.line), blame_w));
                         gutter_s.push_str(&" ".repeat(sign_w));
-                        if num_w > 0 {
+                        if num_w > 0 && ed.config.line_numbers {
                             gutter_s.push_str(&format!("{:>w$} ", row.line + 1, w = num_w - 1));
                         }
                     } else {
@@ -624,6 +640,7 @@ pub fn draw_content(
             bw: wc,
             bh: wr.body_rows() as f32 * ch,
             gutter_cols: wr.gutter,
+            blame_cols: u32::try_from(usize::from(ed.show_blame) * BLAME_W).unwrap(),
             focused,
         });
     }
@@ -994,9 +1011,10 @@ pub fn draw_content(
             if s.focused { theme.fg } else { theme.gutter_fg },
         ));
         areas.push((gutter_b, s.x, s.y + ch, theme.gutter_fg));
-        areas.push((add, s.x, s.y + ch, theme.sign_add));
-        areas.push((change, s.x, s.y + ch, theme.sign_change));
-        areas.push((delete, s.x, s.y + ch, theme.sign_delete));
+        let sx = s.x + s.blame_cols as f32 * cw;
+        areas.push((add, sx, s.y + ch, theme.sign_add));
+        areas.push((change, sx, s.y + ch, theme.sign_change));
+        areas.push((delete, sx, s.y + ch, theme.sign_delete));
         areas.push((body, s.x + s.gutter_cols as f32 * cw, s.y + ch, theme.fg));
     }
     areas.push((&mut tb_msg, 0.0, h - ch, left_color));

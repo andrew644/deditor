@@ -34,6 +34,8 @@ pub struct Buffer {
     pub revision: u64,
     pub signs: Vec<crate::git::Sign>,
     pub sign_rev: u64,
+    pub blame: Vec<crate::git::BlameLine>,
+    pub blame_rev: u64,
 }
 
 pub fn line_chars(rope: &Rope, line: usize) -> usize {
@@ -120,6 +122,8 @@ impl Buffer {
             revision: 0,
             signs: Vec::new(),
             sign_rev: u64::MAX,
+            blame: Vec::new(),
+            blame_rev: u64::MAX,
         }
     }
 
