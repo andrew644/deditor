@@ -178,6 +178,8 @@ fn normal_key(ed: &mut Editor, key: &Key, mods: ModifiersState) {
         Key::Named(NamedKey::ArrowRight) => Some("l"),
         Key::Named(NamedKey::ArrowUp) => Some("k"),
         Key::Named(NamedKey::ArrowDown) => Some("j"),
+        Key::Named(NamedKey::Home) => Some("0"),
+        Key::Named(NamedKey::End) => Some("$"),
         _ => key_char(key),
     };
     if mods.control_key() {
@@ -648,6 +650,14 @@ fn insert_key(ed: &mut Editor, key: &Key, mods: ModifiersState) {
         }
         Key::Named(NamedKey::ArrowUp) => ed.move_caret(crate::motions::Caret::Up),
         Key::Named(NamedKey::ArrowDown) => ed.move_caret(crate::motions::Caret::Down),
+        Key::Named(NamedKey::Home) => {
+            ed.comp_cancel();
+            ed.move_caret(crate::motions::Caret::Home);
+        }
+        Key::Named(NamedKey::End) => {
+            ed.comp_cancel();
+            ed.move_caret(crate::motions::Caret::End);
+        }
         Key::Named(NamedKey::Escape) if popup => ed.comp_cancel(),
         Key::Named(NamedKey::Enter) if popup => ed.comp_accept(),
         Key::Named(NamedKey::Tab) if popup => ed.comp_accept(),
@@ -830,6 +840,8 @@ fn command_key(ed: &mut Editor, key: &Key, mods: ModifiersState) {
         Key::Named(NamedKey::ArrowUp) if ex => ed.completion_move(-1),
         Key::Named(NamedKey::ArrowLeft) => ed.cmdline_move(-1),
         Key::Named(NamedKey::ArrowRight) => ed.cmdline_move(1),
+        Key::Named(NamedKey::Home) => ed.cmdline_home(),
+        Key::Named(NamedKey::End) => ed.cmdline_end(),
         Key::Named(NamedKey::Backspace) => ed.cmdline_backspace(),
         Key::Named(NamedKey::Delete) => ed.cmdline_delete(),
         Key::Character(s) => {
@@ -864,6 +876,8 @@ fn panel_key(ed: &mut Editor, key: &Key, mods: ModifiersState) {
         Key::Named(NamedKey::Backspace) => ed.panel_backspace(),
         Key::Named(NamedKey::ArrowDown) => ed.panel_move(1),
         Key::Named(NamedKey::ArrowUp) => ed.panel_move(-1),
+        Key::Named(NamedKey::Home) => ed.panel_first(),
+        Key::Named(NamedKey::End) => ed.panel_last(),
         Key::Character(s) => {
             if let Some(c) = s.chars().next()
                 && !c.is_control()
@@ -1017,6 +1031,124 @@ mod tests {
         assert_eq!(ed.buf().rope.len_lines(), 30);
         assert_eq!(ed.buf().rope.line(10).to_string(), "line 21\n");
         assert_eq!(ed.mode, Mode::Normal);
+    }
+
+    #[test]
+    fn home_and_end_move_like_zero_and_dollar() {
+        let mut ed = Editor::test_new();
+        ed.buf_mut()
+            .insert_text("  hello world\nsecond line\n", false);
+        for (start, last) in [
+            (Pos { line: 0, col: 7 }, 12usize),
+            (Pos { line: 1, col: 5 }, 10),
+        ] {
+            let head = Pos {
+                line: start.line,
+                col: 0,
+            };
+            let tail = Pos {
+                line: start.line,
+                col: last,
+            };
+            ed.buf_mut().cursor = start;
+            type_keys(&mut ed, &[Key::Character("0".into())]);
+            assert_eq!(ed.buf().cursor, head);
+            ed.buf_mut().cursor = start;
+            type_keys(&mut ed, &[Key::Named(NamedKey::Home)]);
+            assert_eq!(
+                ed.buf().cursor,
+                head,
+                "Home is not 0 on line {}",
+                start.line
+            );
+            ed.buf_mut().cursor = start;
+            type_keys(&mut ed, &[Key::Character("$".into())]);
+            assert_eq!(ed.buf().cursor, tail);
+            ed.buf_mut().cursor = start;
+            type_keys(&mut ed, &[Key::Named(NamedKey::End)]);
+            assert_eq!(ed.buf().cursor, tail, "End is not $ on line {}", start.line);
+        }
+    }
+
+    #[test]
+    fn end_operates_like_dollar() {
+        let mut ed = Editor::test_new();
+        let body = "  hello world\nsecond line\n";
+        ed.buf_mut().insert_text(body, false);
+        ed.buf_mut().cursor = Pos { line: 0, col: 2 };
+        type_keys(
+            &mut ed,
+            &[Key::Character("d".into()), Key::Character("$".into())],
+        );
+        let like_dollar = ed.buf().rope.to_string();
+        assert_eq!(like_dollar, "  \nsecond line\n");
+        ed.buf_mut().rope = ropey::Rope::from_str(body);
+        ed.buf_mut().after_edit();
+        ed.buf_mut().cursor = Pos { line: 0, col: 2 };
+        type_keys(
+            &mut ed,
+            &[Key::Character("d".into()), Key::Named(NamedKey::End)],
+        );
+        assert_eq!(ed.buf().rope.to_string(), like_dollar);
+    }
+
+    #[test]
+    fn home_and_end_move_the_caret_in_insert_mode() {
+        let mut ed = Editor::test_new();
+        ed.buf_mut().insert_text("hello world\nsecond\n", false);
+        ed.enter_insert();
+        ed.buf_mut().cursor = Pos { line: 0, col: 4 };
+        type_keys(&mut ed, &[Key::Named(NamedKey::End)]);
+        assert_eq!(ed.buf().cursor, Pos { line: 0, col: 11 });
+        type_keys(&mut ed, &[Key::Named(NamedKey::Home)]);
+        assert_eq!(ed.buf().cursor, Pos { line: 0, col: 0 });
+        assert_eq!(ed.mode, Mode::Insert);
+        assert_eq!(ed.buf().rope.to_string(), "hello world\nsecond\n");
+    }
+
+    #[test]
+    fn home_and_end_extend_a_visual_selection() {
+        let mut ed = Editor::test_new();
+        ed.buf_mut().insert_text("hello world\n", false);
+        ed.buf_mut().cursor = Pos { line: 0, col: 5 };
+        type_keys(&mut ed, &[Key::Character("v".into())]);
+        assert_eq!(ed.mode, Mode::Visual);
+        type_keys(&mut ed, &[Key::Named(NamedKey::End)]);
+        assert_eq!(ed.buf().cursor, Pos { line: 0, col: 10 });
+        type_keys(&mut ed, &[Key::Named(NamedKey::Home)]);
+        assert_eq!(ed.buf().cursor, Pos { line: 0, col: 0 });
+        assert_eq!(ed.mode, Mode::Visual);
+        assert!(ed.visual_anchor.is_some());
+    }
+
+    #[test]
+    fn home_and_end_move_within_the_command_line() {
+        let mut ed = Editor::test_new();
+        ed.open_cmdline(CmdKind::Ex);
+        ed.cmdline = "s/foo/bar".into();
+        ed.cmdline_col = 5;
+        type_keys(&mut ed, &[Key::Named(NamedKey::Home)]);
+        assert_eq!(ed.cmdline_col, 0);
+        type_keys(&mut ed, &[Key::Character("q".into())]);
+        assert_eq!(ed.cmdline, "qs/foo/bar");
+        type_keys(&mut ed, &[Key::Named(NamedKey::End)]);
+        assert_eq!(ed.cmdline_col, 10);
+        type_keys(&mut ed, &[Key::Character("z".into())]);
+        assert_eq!(ed.cmdline, "qs/foo/barz");
+    }
+
+    #[test]
+    fn home_and_end_jump_the_panel_list() {
+        let mut ed = Editor::test_new();
+        ed.panel = crate::fuzzy::Panel::Buffers;
+        ed.panel_items = vec!["a".into(), "b".into(), "c".into()];
+        ed.panel_order = vec![0, 1, 2];
+        ed.panel_cursor = 1;
+        type_keys(&mut ed, &[Key::Named(NamedKey::End)]);
+        assert_eq!(ed.panel_cursor, 2);
+        type_keys(&mut ed, &[Key::Named(NamedKey::Home)]);
+        assert_eq!(ed.panel_cursor, 0);
+        assert_eq!(ed.panel, crate::fuzzy::Panel::Buffers);
     }
 
     #[test]

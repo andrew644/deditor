@@ -44,6 +44,8 @@ pub enum Caret {
     Right,
     Up,
     Down,
+    Home,
+    End,
 }
 
 pub fn char_is_word(c: char) -> bool {

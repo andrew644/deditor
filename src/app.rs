@@ -1204,6 +1204,14 @@ impl Editor {
                     line: c.line + 1,
                     col: 0,
                 },
+                C::Home => Pos {
+                    line: c.line,
+                    col: 0,
+                },
+                C::End => Pos {
+                    line: c.line,
+                    col: len,
+                },
                 _ => c,
             }
         };
@@ -1382,6 +1390,14 @@ impl Editor {
         } else {
             (col + delta as usize).min(len)
         };
+    }
+
+    pub fn cmdline_home(&mut self) {
+        self.cmdline_col = 0;
+    }
+
+    pub fn cmdline_end(&mut self) {
+        self.cmdline_col = self.cmdline.chars().count();
     }
 
     pub fn cmdline_insert(&mut self, c: char) {
@@ -2040,6 +2056,14 @@ impl Editor {
         }
         let cur = self.panel_cursor as i32;
         self.panel_cursor = (((cur + delta) % n + n) % n) as usize;
+    }
+
+    pub fn panel_first(&mut self) {
+        self.panel_cursor = 0;
+    }
+
+    pub fn panel_last(&mut self) {
+        self.panel_cursor = self.panel_order.len().saturating_sub(1);
     }
 
     pub fn panel_accept(&mut self) {

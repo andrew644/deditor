@@ -23,6 +23,7 @@ A numeric prefix (`count`) works with motions and most edits, e.g. `3w`, `5x`, `
 | `W` `B` | next / previous WORD start (whitespace-separated) |
 | `e` `E` | end of word / WORD |
 | `0` `^` `$` | first column / first non-blank / end of line |
+| `Home` `End` | same as `0` and `$` (also in visual mode and after an operator) |
 | `gg` | first line (count: line N) |
 | `G` | last line (count: line N) |
 | `gj` `gk` | visual down / up (respects soft wrap) |
@@ -88,6 +89,7 @@ A numeric prefix (`count`) works with motions and most edits, e.g. `3w`, `5x`, `
 | --- | --- |
 | `Ctrl-p` | fuzzy file finder (type to filter, `~` paths work) |
 | `Ctrl-b` | fuzzy buffer switcher |
+| `Home` `End` | first / last match in a fuzzy panel |
 | `gd` | go to definition (LSP) |
 | `K` | hover documentation (LSP) |
 
@@ -126,6 +128,7 @@ caret, cursor line and fuzzy panel; unfocused tab strips are dimmed.
 | `Enter` | newline (auto-indent continues) |
 | `Backspace` `Delete` | delete backward / forward |
 | arrow keys | move the caret, across line ends |
+| `Home` `End` | start / end of the line |
 | `Tab` | insert spaces up to the next `tab_width` stop |
 | `Esc` `Ctrl-c` `Ctrl-[` | return to normal mode |
 
@@ -181,10 +184,10 @@ split is already open.
 
 `Esc` or `Ctrl-c` aborts; `Enter` executes. `~` is expanded in paths.
 
-`Left` / `Right` move the caret inside the command line: typing inserts at the
-caret, `Backspace` deletes before it and `Delete` at it. Search input (`/`, `?`)
-edits the same way; `Up` / `Down` are taken by the completion popup and do
-nothing in search.
+`Left` / `Right` move the caret inside the command line and `Home` / `End` jump
+to its start and end: typing inserts at the caret, `Backspace` deletes before it
+and `Delete` at it. Search input (`/`, `?`) edits the same way; `Up` / `Down` are
+taken by the completion popup and do nothing in search.
 
 `:e`, `:edit` and `:pwd` complete paths. `Tab` lists the entries of the typed
 directory in a popup next to the command line and inserts the top match; further
