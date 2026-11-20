@@ -252,6 +252,12 @@ dictionary does not know — no external program or dictionary package is needed
 Point `spell_dict` at a personal word list to whitelist project names and
 jargon.
 
+Text sits on a fixed cell grid and a wide character (CJK, Hangul, most emoji)
+occupies two cells. Whether it actually fills both depends on the fallback font
+the shaper picks for it: cosmic-text falls back to `Noto Sans CJK`, whose
+advance is about 1.6 cells, so alias that family to `Noto Sans Mono CJK` in
+fontconfig to get exact alignment.
+
 ## Word list licence
 
 The dictionary is generated from the SCOWL `en_US` Hunspell dictionary
