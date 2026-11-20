@@ -31,6 +31,9 @@ pub struct Buffer {
     pub dirty: bool,
     pub undo: Vec<UndoEntry>,
     pub redo: Vec<UndoEntry>,
+    /// Depth of the undo stack when a change operator last cleared text, so
+    /// what gets typed in its place can be folded into the same undo step.
+    pub change_mark: Option<usize>,
     pub crlf: bool,
     pub revision: u64,
     pub signs: Vec<crate::git::Sign>,
@@ -147,6 +150,7 @@ impl Buffer {
             dirty: false,
             undo: Vec::new(),
             redo: Vec::new(),
+            change_mark: None,
             crlf: false,
             revision: 0,
             signs: Vec::new(),
@@ -385,6 +389,7 @@ impl Buffer {
             return;
         };
         self.apply_change(&e.change, true);
+        self.change_mark = None;
         self.cursor = e.cursor_before;
         self.clamp();
         self.revision += 1;
@@ -398,10 +403,51 @@ impl Buffer {
         };
         self.apply_change(&e.change, false);
         self.cursor = e.cursor_after;
+        self.change_mark = None;
         self.clamp();
         self.revision += 1;
         self.refresh_dirty();
         self.undo.push(e);
+    }
+
+    /// Folds what was typed after a change operator into that operator's entry,
+    /// so `cc` and the text that replaced the line undo as one step. Anything
+    /// else in between - a backspace, a cursor move - leaves the entries apart.
+    pub fn fold_change(&mut self, mark: usize) {
+        if mark == 0 || mark >= self.undo.len() {
+            return;
+        }
+        let Some((off, old, base)) = self.as_single_edit(&self.undo[mark - 1].change) else {
+            return;
+        };
+        let Change::Insert { at, text } = &self.undo[mark].change else {
+            return;
+        };
+        if self.offset_of(*at) != off {
+            return;
+        }
+        let text = text.clone();
+        let cursor_after = self.undo[mark].cursor_after;
+        let cursor_before = self.undo[mark - 1].cursor_before;
+        self.undo.truncate(mark);
+        self.undo.push(UndoEntry {
+            change: Change::Replace {
+                edits: vec![(off, old, format!("{text}{base}"))],
+            },
+            cursor_before,
+            cursor_after,
+        });
+    }
+
+    /// The offset a change works at together with the text it took out and put
+    /// in, for the changes that are a single edit.
+    fn as_single_edit(&self, change: &Change) -> Option<(usize, String, String)> {
+        match change {
+            Change::Insert { at, text } => Some((self.offset_of(*at), String::new(), text.clone())),
+            Change::Delete { at, text } => Some((self.offset_of(*at), text.clone(), String::new())),
+            Change::Replace { edits } if edits.len() == 1 => Some(edits[0].clone()),
+            Change::Replace { .. } => None,
+        }
     }
 
     pub fn replace_all(&mut self, edits: Vec<(Pos, String, String)>) {

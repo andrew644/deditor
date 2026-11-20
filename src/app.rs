@@ -635,6 +635,10 @@ impl Editor {
     pub fn leave_insert(&mut self) {
         if self.mode == Mode::Insert {
             self.coalesce_open = false;
+            let mark = self.buf_mut().change_mark.take();
+            if let Some(mark) = mark {
+                self.buf_mut().fold_change(mark);
+            }
             self.lsp.completion = None;
             self.mode = Mode::Normal;
             let b = self.buf_mut();
@@ -648,6 +652,7 @@ impl Editor {
     pub fn enter_insert(&mut self) {
         self.mode = Mode::Insert;
         self.coalesce_open = true;
+        self.buf_mut().change_mark = None;
         self.clear_pending();
     }
 
@@ -836,6 +841,8 @@ impl Editor {
                         col: 0,
                     };
                 }
+                let mark = self.buf().undo.len();
+                self.buf_mut().change_mark = Some(mark);
                 self.mode = Mode::Insert;
                 self.coalesce_open = true;
             }

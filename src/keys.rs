@@ -1896,6 +1896,51 @@ mod tests {
     }
 
     #[test]
+    fn typing_after_a_line_change_undoes_with_the_change() {
+        let mut ed = Editor::test_new();
+        ed.config.clipboard = false;
+        ed.buf_mut().insert_text("one\ntwo\nthree\n", false);
+        ed.buf_mut().cursor = Pos { line: 1, col: 1 };
+        press(&mut ed, "cc");
+        press(&mut ed, "new");
+        esc(&mut ed);
+        assert_eq!(ed.buf().rope.to_string(), "one\nnew\nthree\n");
+        press(&mut ed, "u");
+        assert_eq!(ed.buf().rope.to_string(), "one\ntwo\nthree\n");
+    }
+
+    #[test]
+    fn typing_after_a_word_change_undoes_with_the_change() {
+        let mut ed = Editor::test_new();
+        ed.config.clipboard = false;
+        ed.buf_mut().insert_text("one two\n", false);
+        ed.buf_mut().cursor = Pos { line: 0, col: 0 };
+        press(&mut ed, "ciw");
+        press(&mut ed, "X");
+        esc(&mut ed);
+        assert_eq!(ed.buf().rope.to_string(), "X two\n");
+        press(&mut ed, "u");
+        assert_eq!(ed.buf().rope.to_string(), "one two\n");
+    }
+
+    #[test]
+    fn a_later_insert_undoes_apart_from_an_earlier_change() {
+        let mut ed = Editor::test_new();
+        ed.config.clipboard = false;
+        ed.buf_mut().insert_text("one\ntwo\n", false);
+        ed.buf_mut().cursor = Pos { line: 0, col: 0 };
+        press(&mut ed, "cc");
+        press(&mut ed, "new");
+        esc(&mut ed);
+        press(&mut ed, "A");
+        press(&mut ed, "!");
+        esc(&mut ed);
+        assert_eq!(ed.buf().rope.to_string(), "new!\ntwo\n");
+        press(&mut ed, "u");
+        assert_eq!(ed.buf().rope.to_string(), "new\ntwo\n");
+    }
+
+    #[test]
     fn count_replaces_several_chars() {
         let mut ed = Editor::test_new();
         ed.config.clipboard = false;
