@@ -1,18 +1,29 @@
-use std::io::Read;
-use std::io::Write;
-use std::process::{Child, Command, Stdio};
-use std::sync::Arc;
-use std::sync::Mutex;
-use std::sync::mpsc::{Receiver, TryRecvError, channel};
-use std::thread;
-use winit::event_loop::EventLoopProxy;
+use std::collections::{HashMap, HashSet};
+use std::sync::LazyLock;
+use std::time::SystemTime;
+
+const WORDS: &str = include_str!("../data/wordlist/en_US.txt");
+
+static BASE_WORDS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| WORDS.lines().collect());
+
+fn is_apostrophe(c: char) -> bool {
+    c == '\'' || c == '\u{2019}'
+}
+
+fn is_token_char(c: char) -> bool {
+    c.is_alphanumeric() || is_apostrophe(c)
+}
+
+pub fn normalize(word: &str) -> String {
+    word.replace('\u{2019}', "'").to_lowercase()
+}
 
 #[derive(Default)]
 pub struct Spell {
-    pub words: Vec<String>,
-    pub spans: std::collections::HashMap<usize, (u64, Vec<(usize, usize)>)>,
-    inflight: Option<Receiver<Vec<String>>>,
-    child: Arc<Mutex<Option<Child>>>,
+    pub spans: HashMap<usize, (u64, Vec<(usize, usize)>)>,
+    personal: HashSet<String>,
+    personal_path: String,
+    personal_stamp: Option<SystemTime>,
 }
 
 impl Spell {
@@ -20,217 +31,178 @@ impl Spell {
         Self::default()
     }
 
-    #[cfg(test)]
-    pub fn busy(&self) -> bool {
-        self.inflight.is_some()
-    }
-
     pub fn clear(&mut self) {
-        self.abort();
-        self.inflight = None;
-        self.words.clear();
         self.spans.clear();
     }
 
-    fn abort(&mut self) {
-        if let Some(mut ch) = self.child.lock().unwrap().take() {
-            let _ = ch.kill();
-            let _ = ch.wait();
+    pub fn sync_personal(&mut self, path: &str) {
+        let stamp = if path.is_empty() {
+            None
+        } else {
+            std::fs::metadata(path).and_then(|m| m.modified()).ok()
+        };
+        if path == self.personal_path && stamp == self.personal_stamp {
+            return;
         }
+        self.personal_path = path.to_string();
+        self.personal_stamp = stamp;
+        self.personal = match stamp {
+            Some(_) => std::fs::read_to_string(path)
+                .unwrap_or_default()
+                .lines()
+                .map(|l| l.trim())
+                .filter(|l| !l.is_empty() && !l.starts_with('#'))
+                .map(normalize)
+                .collect(),
+            None => HashSet::new(),
+        };
+        self.spans.clear();
     }
 
-    pub fn request(&mut self, text: String, dict: String, proxy: Option<EventLoopProxy<()>>) {
-        self.abort();
-        let (tx, rx) = channel();
-        self.inflight = Some(rx);
-        let slot = self.child.clone();
-        thread::spawn(move || {
-            let words = run_hunspell_slot(&text, &dict, &slot);
-            let _ = tx.send(words);
-            if let Some(p) = proxy {
-                let _ = p.send_event(());
-            }
-        });
+    pub fn known(&self, word: &str) -> bool {
+        self.personal.contains(word) || BASE_WORDS.contains(word)
     }
 
-    pub fn poll(&mut self) {
-        let update = self.inflight.as_ref().map(|rx| rx.try_recv());
-        match update {
-            Some(Ok(words)) => {
-                self.words = words;
-                self.spans.clear();
-                self.inflight = None;
-            }
-            Some(Err(TryRecvError::Disconnected)) => self.inflight = None,
-            _ => {}
-        }
-    }
-}
-
-#[cfg(test)]
-pub fn run_hunspell(text: &str, dict: &str) -> Vec<String> {
-    run_hunspell_slot(text, dict, &Arc::new(Mutex::new(None)))
-}
-
-fn run_hunspell_slot(text: &str, dict: &str, slot: &Arc<Mutex<Option<Child>>>) -> Vec<String> {
-    let mut cmd = Command::new("hunspell");
-    cmd.arg("-l");
-    if !dict.is_empty() {
-        cmd.arg("-d").arg(dict);
-    }
-    let mut child = match cmd
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-    {
-        Ok(c) => c,
-        Err(_) => return Vec::new(),
-    };
-    if let Some(mut si) = child.stdin.take() {
-        let text = text.to_string();
-        std::thread::spawn(move || {
-            let _ = si.write_all(text.as_bytes());
-        });
-    }
-    let so = child.stdout.take();
-    *slot.lock().unwrap() = Some(child);
-    let mut out = String::new();
-    if let Some(mut so) = so {
-        let _ = so.read_to_string(&mut out);
-    }
-    if let Some(mut ch) = slot.lock().unwrap().take() {
-        let _ = ch.wait();
-    }
-    let mut words: Vec<String> = Vec::new();
-    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for line in out.lines() {
-        let w = line.split('/').next().unwrap_or("").trim();
-        if !w.is_empty() && seen.insert(w.to_string()) {
-            words.push(w.to_string());
-        }
-    }
-    words
-}
-
-pub fn misspelled_spans(line: &str, words: &[String]) -> Vec<(usize, usize)> {
-    use crate::motions::char_is_word;
-    let chars: Vec<char> = line.chars().collect();
-    let mut spans: Vec<(usize, usize)> = Vec::new();
-    for w in words {
-        let t: Vec<char> = w.chars().collect();
-        if t.is_empty() {
-            continue;
-        }
+    pub fn spans_for(&self, line: &str) -> Vec<(usize, usize)> {
+        let chars: Vec<char> = line.chars().collect();
+        let mut spans = Vec::new();
         let mut i = 0;
-        while i + t.len() <= chars.len() {
-            if chars[i..i + t.len()] == t[..] {
-                let before_ok = i == 0 || !char_is_word(chars[i - 1]) || !char_is_word(t[0]);
-                let after_ok = i + t.len() >= chars.len()
-                    || !char_is_word(chars[i + t.len()])
-                    || !char_is_word(t[t.len() - 1]);
-                if before_ok && after_ok {
-                    spans.push((i, t.len()));
-                }
-                i += t.len();
-            } else {
+        while i < chars.len() {
+            if !is_token_char(chars[i]) {
+                i += 1;
+                continue;
+            }
+            let start = i;
+            while i < chars.len() && is_token_char(chars[i]) {
                 i += 1;
             }
+            let mut s = start;
+            let mut e = i;
+            while s < e && !chars[s].is_alphanumeric() {
+                s += 1;
+            }
+            while e > s && !chars[e - 1].is_alphanumeric() {
+                e -= 1;
+            }
+            if e - s < 2 {
+                continue;
+            }
+            let word = normalize(&chars[s..e].iter().collect::<String>());
+            if !word.chars().any(|c| c.is_alphabetic()) || word.chars().any(|c| c.is_numeric()) {
+                continue;
+            }
+            if !self.known(&word) {
+                spans.push((s, e - s));
+            }
         }
+        spans
     }
-    spans.sort();
-    spans
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    static SPELL_PROC_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-    #[test]
-    fn spans_find_whole_word_occurrences() {
-        let words = vec!["mistaked".to_string()];
-        let spans = misspelled_spans("a mistaked mistakedx (mistaked).", &words);
-        assert_eq!(spans, vec![(2, 8), (22, 8)]);
-    }
-
-    #[test]
-    fn spans_cover_multiple_words() {
-        let words = vec!["one".to_string(), "two".to_string()];
-        let spans = misspelled_spans("one two one", &words);
-        assert_eq!(spans, vec![(0, 3), (4, 3), (8, 3)]);
-    }
-
-    #[test]
-    fn run_hunspell_flags_unknown_words() {
-        let _g = SPELL_PROC_LOCK.lock().unwrap();
-        if Command::new("hunspell").arg("-D").output().is_err() {
-            return;
-        }
-        let dir =
-            std::env::temp_dir().join(format!("deditor-spell-test-dict-{}", std::process::id()));
+    fn temp(name: &str, body: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("deditor-spell-{}-{name}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("testdict.aff"), "SET UTF-8\n").unwrap();
-        std::fs::write(dir.join("testdict.dic"), "3\nhello\nworld\nmistaked\n").unwrap();
-        let dict = dir.join("testdict").display().to_string();
-        let words = run_hunspell("hello mistaked blorp world zorp\n", &dict);
-        std::fs::remove_dir_all(&dir).unwrap();
-        assert_eq!(words, vec!["blorp".to_string(), "zorp".to_string()]);
-        let missing = run_hunspell("anything\n", "/nonexistent/dict");
-        assert!(missing.is_empty());
+        let path = dir.join(name);
+        std::fs::write(&path, body).unwrap();
+        path
     }
 
     #[test]
-    fn request_poll_delivers_words() {
-        let _g = SPELL_PROC_LOCK.lock().unwrap();
-        let mut sp = Spell::new();
-        assert!(!sp.busy());
-        sp.request("hello blorp\n".to_string(), String::new(), None);
-        assert!(sp.busy());
-        for _ in 0..500 {
-            sp.poll();
-            if !sp.busy() {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
+    fn flags_unknown_words_with_char_offsets() {
+        let sp = Spell::new();
+        assert_eq!(sp.spans_for("the quik brown fox"), vec![(4, 4)]);
+        assert_eq!(
+            sp.spans_for("one mistaked, two teh."),
+            vec![(4, 8), (18, 3)]
+        );
+        assert!(sp.spans_for("all fine here").is_empty());
+    }
+
+    #[test]
+    fn offsets_count_characters_not_bytes() {
+        let sp = Spell::new();
+        assert_eq!(sp.spans_for("\u{2013} quik"), vec![(2, 4)]);
+        assert_eq!(sp.spans_for("naïve quik"), vec![(0, 5), (6, 4)]);
+    }
+
+    #[test]
+    fn accepts_inflected_possessive_and_contracted_forms() {
+        let sp = Spell::new();
+        for line in [
+            "running walked happier quickly",
+            "the dog's bone and the dogs' bones",
+            "don't isn't can't",
+            "London london MacDonald",
+        ] {
+            assert!(sp.spans_for(line).is_empty(), "{line}");
         }
-        assert!(!sp.busy());
+    }
+
+    #[test]
+    fn ignores_short_words_numbers_and_identifiers() {
+        let sp = Spell::new();
+        for line in [
+            "x = y + 42",
+            "utf8 sha256 x86 mp3",
+            "foo_bar _private name_of",
+            "a I 42",
+            "... --- ???",
+        ] {
+            assert!(sp.spans_for(line).is_empty(), "{line}");
+        }
+    }
+
+    #[test]
+    fn identifier_segments_are_checked_one_by_one() {
+        let sp = Spell::new();
+        assert_eq!(sp.spans_for("name_mistaked"), vec![(5, 8)]);
+        assert_eq!(sp.spans_for("quik_2_x"), vec![(0, 4)]);
+    }
+
+    #[test]
+    fn personal_words_are_accepted_and_reloaded() {
+        let path = temp("personal.txt", "# comment\n\nMistaked\nquik\n");
+        let mut sp = Spell::new();
+        assert_eq!(sp.spans_for("mistaked quik").len(), 2);
+        sp.sync_personal(path.to_str().unwrap());
+        assert!(sp.spans_for("mistaked quik").is_empty());
+        std::fs::write(&path, "blorp\n").unwrap();
+        touch(&path);
+        sp.sync_personal(path.to_str().unwrap());
+        assert_eq!(sp.spans_for("blorp mistaked"), vec![(6, 8)]);
+        std::fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn clearing_personal_path_drops_its_words() {
+        let path = temp("personal-drop.txt", "blorp\n");
+        let mut sp = Spell::new();
+        sp.sync_personal(path.to_str().unwrap());
+        assert!(sp.spans_for("blorp").is_empty());
+        sp.sync_personal("");
+        assert_eq!(sp.spans_for("blorp"), vec![(0, 5)]);
+        std::fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn clear_drops_cached_spans() {
+        let mut sp = Spell::new();
+        sp.spans.insert(3, (7, vec![(1, 2)]));
         sp.clear();
-        assert!(sp.words.is_empty());
+        assert!(sp.spans.is_empty());
     }
 
-    #[cfg(unix)]
-    #[test]
-    fn a_new_request_replaces_the_running_check() {
-        let _g = SPELL_PROC_LOCK.lock().unwrap();
-        let dir = std::env::temp_dir().join(format!("deditor-spell-fake-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(
-            dir.join("hunspell"),
-            "#!/bin/sh\ncase \" $* \" in *\" slow \"*) sleep 5 ;; esac\ncat\n",
-        )
-        .unwrap();
-        std::fs::set_permissions(
-            dir.join("hunspell"),
-            std::os::unix::fs::PermissionsExt::from_mode(0o755),
-        )
-        .unwrap();
-        let old_path = std::env::var("PATH").unwrap_or_default();
-        unsafe { std::env::set_var("PATH", format!("{}:{old_path}", dir.display())) };
-        let mut sp = Spell::new();
-        sp.request("alpha\n".to_string(), "slow".to_string(), None);
-        std::thread::sleep(std::time::Duration::from_millis(100));
-        sp.request("beta\n".to_string(), String::new(), None);
-        for _ in 0..1000 {
-            sp.poll();
-            if !sp.busy() {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        unsafe { std::env::set_var("PATH", old_path) };
-        std::fs::remove_dir_all(&dir).unwrap();
-        assert_eq!(sp.words, vec!["beta".to_string()]);
+    fn touch(path: &std::path::Path) {
+        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(2);
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(later)
+            .unwrap();
     }
 }

@@ -189,6 +189,23 @@ Config file: `~/.config/deditor/config.yaml`
 `DEDITOR_CONFIG=/path/to/file`. See [config.example.yaml](config.example.yaml)
 for every key (font, tab width, line numbers, clipboard sync, whitespace
 display, spellcheck, and a full color theme). `:settings` edits these live and
-saves on change. Spellcheck (`F1`) underlines words `hunspell` does not know;
-it needs the `hunspell` binary and a dictionary (e.g. `hunspell_en_us`), with
-an optional `spell_dict` path. Without them it stays silent.
+saves on change. Spellcheck (`F1`) underlines words the built-in English
+dictionary does not know — no external program or dictionary package is needed.
+Point `spell_dict` at a personal word list to whitelist project names and
+jargon.
+
+## Word list licence
+
+The dictionary is generated from the SCOWL `en_US` Hunspell dictionary
+(release 2026.02.25, <https://wordlist.aspell.net/>), embedded in the binary.
+It is distributed under the MIT-like licence reproduced in
+[data/wordlist/LICENSE](data/wordlist/LICENSE):
+
+> Copyright 2000-2026 by Kevin Atkinson
+>
+> Permission to use, copy, modify, distribute, and sell any part of SCOWLv2, or
+> word lists created from it, is hereby granted without fee, provided that the
+> above copyright notice appears in all copies and that both the above copyright
+> notice and this notice appear in supporting documentation. Kevin Atkinson
+> makes no representations about the suitability of this database for any
+> purpose. It is provided "as is" without express or implied warranty.

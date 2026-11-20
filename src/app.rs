@@ -70,8 +70,6 @@ pub struct Editor {
     pub lsp: crate::lsp::LspManager,
     pub context_menu: Option<String>,
     pub spell: crate::spell::Spell,
-    spell_sig: u64,
-    spell_last: Option<std::time::Instant>,
 }
 
 #[derive(PartialEq, Eq, Debug)]
@@ -165,8 +163,6 @@ impl Editor {
             lsp: crate::lsp::LspManager::new(),
             context_menu: None,
             spell: crate::spell::Spell::new(),
-            spell_sig: u64::MAX,
-            spell_last: None,
         };
         if let Some(p) = path {
             match Buffer::load(p) {
@@ -338,9 +334,10 @@ impl Editor {
 
     pub fn refresh_spell_spans(&mut self) {
         use std::hash::{Hash, Hasher};
-        if self.spell.words.is_empty() && self.spell.spans.is_empty() {
+        if !self.config.spellcheck {
             return;
         }
+        self.spell.sync_personal(&self.config.spell_dict);
         let last = self.buffers[self.active].rope.len_lines().saturating_sub(1);
         let start = self.buffers[self.active].view_top.min(last);
         let end = (self.buffers[self.active].view_top + self.view_rows).min(last);
@@ -358,11 +355,10 @@ impl Editor {
                 }
             })
             .collect();
-        let words = &self.spell.words;
-        let cache = &mut self.spell.spans;
+        let spell = &mut self.spell;
         for (line, hv, raw) in stale {
-            let spans = crate::spell::misspelled_spans(&raw, words);
-            cache.insert(line, (hv, spans));
+            let spans = spell.spans_for(&raw);
+            spell.spans.insert(line, (hv, spans));
         }
     }
 
@@ -1415,8 +1411,6 @@ impl Editor {
         self.lsp.hover = None;
         self.lsp.completion = None;
         self.spell.clear();
-        self.spell_sig = u64::MAX;
-        self.spell_last = None;
     }
 
     pub fn activate(&mut self, i: usize) {
@@ -1501,37 +1495,9 @@ impl Editor {
         }
     }
 
-    pub fn poll_spell(&mut self) {
-        self.spell.poll();
-    }
-
-    pub fn maybe_check_spell(&mut self, proxy: Option<winit::event_loop::EventLoopProxy<()>>) {
-        if !self.config.spellcheck {
-            return;
-        }
-        let rev = self.buf().revision;
-        if rev == self.spell_sig {
-            return;
-        }
-        if self
-            .spell_last
-            .is_some_and(|t| t.elapsed().as_millis() < 500)
-        {
-            return;
-        }
-        self.spell_sig = rev;
-        self.spell_last = Some(std::time::Instant::now());
-        let text = self.buf().rope.to_string();
-        let dict = self.config.spell_dict.clone();
-        self.spell.request(text, dict, proxy);
-    }
-
     pub fn toggle_spell(&mut self) {
         self.config.spellcheck = !self.config.spellcheck;
-        if self.config.spellcheck {
-            self.spell_sig = u64::MAX;
-            self.spell_last = None;
-        } else {
+        if !self.config.spellcheck {
             self.spell.clear();
         }
         self.set_status(
@@ -1658,8 +1624,6 @@ impl Editor {
                 crate::config::setting_activate(&mut self.config, &key);
                 if key == "spellcheck" {
                     self.spell.clear();
-                    self.spell_sig = u64::MAX;
-                    self.spell_last = None;
                 }
                 let (theme, warns) = RgbTheme::from_theme_checked(&self.config.theme);
                 self.theme = theme;
@@ -2805,7 +2769,7 @@ mod tests {
     #[test]
     fn spell_span_cache_recomputes_edited_lines() {
         let mut ed = ed_with("teh one\ntwo teh\n");
-        ed.spell.words = vec!["teh".to_string()];
+        ed.config.spellcheck = true;
         ed.refresh_spell_spans();
         assert_eq!(
             ed.spell.spans.get(&0).map(|(_, s)| s.clone()),
@@ -2826,7 +2790,7 @@ mod tests {
         let mut ed = Editor::test_new();
         ed.config.clipboard = false;
         ed.buf_mut().insert_text("aaa", false);
-        ed.spell.words = vec!["aaa".to_string()];
+        ed.spell.spans.insert(0, (1, vec![(0, 3)]));
         ed.lsp.hover = Some("h".into());
         ed.lsp.completion = Some(crate::lsp::CompletionState {
             items: Vec::new(),
@@ -2839,7 +2803,7 @@ mod tests {
         ed.buffers.push(Buffer::empty());
         ed.close_buffer(None, true);
         assert_eq!(ed.buffers.len(), 1);
-        assert!(ed.spell.words.is_empty());
+        assert!(ed.spell.spans.is_empty());
         assert!(ed.lsp.hover.is_none());
         assert!(ed.lsp.completion.is_none());
     }
@@ -2851,11 +2815,11 @@ mod tests {
         let f = dir.join("a.txt");
         std::fs::write(&f, "hello\n").unwrap();
         let mut ed = Editor::test_new();
-        ed.spell.words = vec!["hello".to_string()];
+        ed.spell.spans.insert(0, (1, vec![(0, 3)]));
         ed.lsp.hover = Some("h".into());
         ed.open_path(f.clone());
         assert!(ed.buf().path.as_ref().is_some_and(|p| p == &f));
-        assert!(ed.spell.words.is_empty());
+        assert!(ed.spell.spans.is_empty());
         assert!(ed.lsp.hover.is_none());
         std::fs::remove_dir_all(&dir).ok();
     }

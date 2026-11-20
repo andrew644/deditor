@@ -345,7 +345,7 @@ pub fn draw_content(
             }
         }
     }
-    if !ed.spell.words.is_empty() {
+    if ed.config.spellcheck {
         for (r, scr) in rows.iter().enumerate() {
             if scr.line >= buf.rope.len_lines() || scr.start >= scr.end {
                 continue;
