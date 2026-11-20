@@ -521,14 +521,7 @@ pub fn draw_content(
                     if scr.line >= buf.rope.len_lines() || scr.start >= scr.end {
                         continue;
                     }
-                    let ls = buf.rope.line(scr.line);
-                    let look = (scr.end + t.len() - 1).min(ls.len_chars());
-                    let chars: Vec<char> = ls.slice(scr.start..look).chars().collect();
-                    for j in 0..(scr.end - scr.start).min(chars.len()) {
-                        if !crate::search::matches_at(&chars, &t, j, fold) {
-                            continue;
-                        }
-                        let i = scr.start + j;
+                    for i in row_matches(&buf.rope, scr.line, scr.start, scr.end, &t, fold) {
                         rects.push(rects::RectInstance {
                             x: ox
                                 + (gutter + wrap.row_x(&buf.rope, scr.line, scr.start, i)) as f32
@@ -1333,6 +1326,32 @@ fn sel_row_span(sa: Pos, sb: Pos, lw: bool, line: usize) -> Option<(Option<usize
     }
 }
 
+/// Char offsets inside `[start, end)` where `t` begins, looking far enough
+/// past `end` to catch a match that carries on into the next row of a wrapped
+/// line, and reading only that much of the line.
+fn row_matches(
+    rope: &ropey::Rope,
+    line: usize,
+    start: usize,
+    end: usize,
+    t: &[char],
+    fold: bool,
+) -> Vec<usize> {
+    if t.is_empty() || start >= end {
+        return Vec::new();
+    }
+    let ls = rope.line(line);
+    let look = (end + t.len() - 1).min(ls.len_chars());
+    if start >= look {
+        return Vec::new();
+    }
+    let chars: Vec<char> = ls.slice(start..look).chars().collect();
+    (0..(end - start).min(chars.len()))
+        .filter(|j| crate::search::matches_at(&chars, t, *j, fold))
+        .map(|j| start + j)
+        .collect()
+}
+
 fn elide_path(s: &str, cols: usize) -> String {
     if cells(s) <= cols {
         return s.to_string();
@@ -1627,5 +1646,22 @@ mod tests {
             (10.0, 36.0, 100.0, 8.0)
         );
         assert_eq!(marked[1].color, theme.popup_sel);
+    }
+
+    #[test]
+    fn search_matches_start_only_inside_their_own_row() {
+        let r = ropey::Rope::from_str("xxabcdxx\nyy");
+        let t = |s: &str| s.chars().collect::<Vec<char>>();
+        assert_eq!(row_matches(&r, 0, 0, 6, &t("abcd"), false), vec![2]);
+        assert_eq!(
+            row_matches(&r, 0, 0, 4, &t("abcd"), false),
+            vec![2],
+            "a match running past the row's last cell still starts on this row"
+        );
+        assert!(row_matches(&r, 0, 0, 2, &t("abcd"), false).is_empty());
+        assert_eq!(row_matches(&r, 0, 2, 6, &t("bc"), false), vec![3]);
+        assert_eq!(row_matches(&r, 0, 0, 6, &t("AB"), true), vec![2]);
+        assert!(row_matches(&r, 0, 0, 6, &t("AB"), false).is_empty());
+        assert!(row_matches(&r, 0, 6, 6, &t("xy"), false).is_empty());
     }
 }
