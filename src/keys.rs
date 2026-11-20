@@ -1849,10 +1849,22 @@ mod tests {
         ed.config.clipboard = false;
         ed.buf_mut().insert_text("aaa\nbbb\nccc\nddd\n", false);
         ed.buf_mut().cursor = Pos { line: 0, col: 0 };
-        press(&mut ed, "2J");
+        press(&mut ed, "3J");
         assert_eq!(ed.buf().rope.to_string(), "aaa bbb ccc\nddd\n");
         press(&mut ed, "u");
         assert_eq!(ed.buf().rope.to_string(), "aaa\nbbb\nccc\nddd\n");
+    }
+
+    #[test]
+    fn a_join_count_counts_the_lines_that_take_part() {
+        let mut ed = Editor::test_new();
+        ed.config.clipboard = false;
+        ed.buf_mut().insert_text("aaa\nbbb\nccc\nddd\n", false);
+        ed.buf_mut().cursor = Pos { line: 0, col: 0 };
+        press(&mut ed, "2J");
+        assert_eq!(ed.buf().rope.to_string(), "aaa bbb\nccc\nddd\n");
+        press(&mut ed, "2J");
+        assert_eq!(ed.buf().rope.to_string(), "aaa bbb ccc\nddd\n");
     }
 
     #[test]

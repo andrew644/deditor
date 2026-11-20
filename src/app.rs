@@ -1044,7 +1044,9 @@ impl Editor {
     }
 
     pub fn join_lines(&mut self, count: u32) {
-        let n = count.max(1) as usize;
+        // The count is how many lines take part, so one fewer break goes away;
+        // `2J` is the same as `J`.
+        let n = (count as usize).saturating_sub(1).max(1);
         let line = self.buf().cursor.line;
         let last = self.buf().rope.len_lines().saturating_sub(1);
         let mut edits = Vec::new();
