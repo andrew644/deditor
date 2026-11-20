@@ -150,6 +150,14 @@ rectangle segment per line, padding short lines.
 
 `Esc` or `Ctrl-c` aborts; `Enter` executes. `~` is expanded in paths.
 
+`:e`, `:edit` and `:pwd` complete paths. `Tab` lists the entries of the typed
+directory in a popup next to the command line and inserts the top match; further
+`Tab` presses cycle through the list (`Shift-Tab` backwards), arrow keys step
+without wrapping, and completing a directory lists its contents. Typing or
+deleting re-filters the open list, `Enter` runs the command as typed, and `Esc`
+dismisses the list before it aborts the command line. Hidden files are not
+listed.
+
 Closing the window with unsaved changes warns first; closing again
 discards them.
 

@@ -67,9 +67,17 @@ pub struct Editor {
     pub panel_items: Vec<String>,
     pub panel_order: Vec<usize>,
     pub panel_cursor: usize,
+    pub completions: Option<Completions>,
     pub lsp: crate::lsp::LspManager,
     pub context_menu: Option<String>,
     pub spell: crate::spell::Spell,
+}
+
+pub struct Completions {
+    pub items: Vec<String>,
+    pub order: Vec<usize>,
+    pub cursor: usize,
+    pub prefix: String,
 }
 
 #[derive(PartialEq, Eq, Debug)]
@@ -160,6 +168,7 @@ impl Editor {
             panel_items: Vec::new(),
             panel_order: Vec::new(),
             panel_cursor: 0,
+            completions: None,
             lsp: crate::lsp::LspManager::new(),
             context_menu: None,
             spell: crate::spell::Spell::new(),
@@ -1033,6 +1042,7 @@ impl Editor {
     pub fn close_cmdline(&mut self) {
         self.cmd_kind = None;
         self.cmdline.clear();
+        self.completions = None;
         self.mode = Mode::Normal;
         self.clear_pending();
     }
@@ -1123,6 +1133,7 @@ impl Editor {
             }
             Ok(cmd) => {
                 self.cmd_kind = None;
+                self.completions = None;
                 self.cmdline.clear();
                 self.mode = Mode::Normal;
                 match cmd {
@@ -1657,6 +1668,72 @@ impl Editor {
         }
     }
 
+    pub fn refresh_completions(&mut self) {
+        let Some((prefix, dir, word)) = completion_target(&self.cmdline) else {
+            self.completions = None;
+            return;
+        };
+        let items = crate::fuzzy::list_dir(&files_root(&dir));
+        let order = crate::fuzzy::fuzzy_filter(&items, &word);
+        self.completions = if order.is_empty() {
+            None
+        } else {
+            Some(Completions {
+                items,
+                order,
+                cursor: 0,
+                prefix,
+            })
+        };
+    }
+
+    pub fn sync_completions(&mut self) {
+        if self.completions.is_some() {
+            self.refresh_completions();
+        }
+    }
+
+    pub fn complete_next(&mut self) {
+        if self.completions.is_none() {
+            self.refresh_completions();
+            self.completion_select(0, true);
+        } else {
+            self.completion_select(1, true);
+        }
+    }
+
+    pub fn completion_move(&mut self, delta: i32) {
+        if self.completions.is_some() {
+            self.completion_select(delta, false);
+        }
+    }
+
+    fn completion_select(&mut self, delta: i32, wrap: bool) {
+        let Some((prefix, name)) = self.completion_step(delta, wrap) else {
+            return;
+        };
+        self.cmdline = format!("{prefix}{name}");
+        if name.ends_with('/') {
+            self.refresh_completions();
+        }
+    }
+
+    fn completion_step(&mut self, delta: i32, wrap: bool) -> Option<(String, String)> {
+        let c = self.completions.as_mut()?;
+        let n = c.order.len() as i32;
+        if n == 0 {
+            return None;
+        }
+        let cur = c.cursor as i32;
+        c.cursor = if wrap {
+            ((cur + delta) % n + n) % n
+        } else {
+            (cur + delta).clamp(0, n - 1)
+        } as usize;
+        let name = c.items[c.order[c.cursor]].clone();
+        Some((c.prefix.clone(), name))
+    }
+
     pub fn open_path(&mut self, p: std::path::PathBuf) {
         if let Some(i) = self
             .buffers
@@ -1739,6 +1816,21 @@ fn same_path(a: &std::path::Path, b: &std::path::Path) -> bool {
             (std::fs::canonicalize(a), std::fs::canonicalize(b)),
             (Ok(x), Ok(y)) if x == y
         )
+}
+
+fn completion_target(cmdline: &str) -> Option<(String, String, String)> {
+    let sep = cmdline.find(char::is_whitespace)?;
+    if !matches!(&cmdline[..sep], "e" | "edit" | "pwd") {
+        return None;
+    }
+    let arg = cmdline[sep..].trim_start_matches(char::is_whitespace);
+    let cut = arg.rfind('/').map(|i| i + 1).unwrap_or(0);
+    let dir = &arg[..cut];
+    Some((
+        format!("{} {dir}", &cmdline[..sep]),
+        dir.to_string(),
+        arg[cut..].to_string(),
+    ))
 }
 
 fn files_root(dir: &str) -> std::path::PathBuf {
@@ -2166,6 +2258,9 @@ mod tests {
 
     #[test]
     fn files_root_expands_tilde_and_defaults_to_cwd() {
+        let _cwd = CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(home) = std::env::var_os("HOME") {
             assert_eq!(files_root("~/"), std::path::PathBuf::from(home));
             assert_eq!(files_root("~/src/"), files_root("~/").join("src").join(""));
@@ -2866,5 +2961,164 @@ mod tests {
         ed.scroll_to_cursor(50);
         assert_eq!(ed.buf().view_top, 0);
         assert!(t.elapsed().as_millis() < 500);
+    }
+
+    fn completion_tree(tag: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("deditor_complete_{}_{tag}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("beta.rs"), "a").unwrap();
+        std::fs::write(dir.join("beta.txt"), "b").unwrap();
+        std::fs::write(dir.join("gamma.rs"), "c").unwrap();
+        std::fs::write(dir.join("src").join("main.rs"), "d").unwrap();
+        dir
+    }
+
+    fn completion_names(ed: &Editor) -> Vec<String> {
+        let Some(c) = &ed.completions else {
+            return Vec::new();
+        };
+        c.order.iter().map(|&i| c.items[i].clone()).collect()
+    }
+
+    fn press(ed: &mut Editor, keys: &[winit::keyboard::Key]) {
+        for k in keys {
+            crate::keys::key_down(ed, k, winit::keyboard::ModifiersState::empty());
+        }
+    }
+
+    fn ch(c: char) -> winit::keyboard::Key {
+        winit::keyboard::Key::Character(c.to_string().into())
+    }
+
+    fn ed_in(dir: &std::path::Path) -> Editor {
+        std::env::set_current_dir(dir).unwrap();
+        let mut ed = Editor::test_new();
+        ed.open_cmdline(crate::mode::CmdKind::Ex);
+        ed.cmdline.clear();
+        ed
+    }
+
+    #[test]
+    fn tab_completion_inserts_a_match_and_keeps_the_list_open() {
+        let _cwd = CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let dir = completion_tree("insert");
+        let saved = std::env::current_dir().unwrap();
+        let mut ed = ed_in(&dir);
+        ed.cmdline = "e beta".to_string();
+        ed.complete_next();
+        assert!(ed.cmdline == "e beta.rs" || ed.cmdline == "e beta.txt");
+        assert_eq!(completion_names(&ed), vec!["beta.rs", "beta.txt"]);
+        std::env::set_current_dir(&saved).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn tab_cycles_through_matches_and_up_clamps() {
+        let _cwd = CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let dir = completion_tree("cycle");
+        let saved = std::env::current_dir().unwrap();
+        let mut ed = ed_in(&dir);
+        ed.cmdline = "e beta".to_string();
+        ed.complete_next();
+        let first = ed.cmdline.clone();
+        ed.completion_move(-1);
+        assert_eq!(ed.cmdline, first);
+        ed.complete_next();
+        let second = ed.cmdline.clone();
+        assert_ne!(first, second);
+        assert!(second == "e beta.rs" || second == "e beta.txt");
+        ed.complete_next();
+        assert_eq!(ed.cmdline, first);
+        std::env::set_current_dir(&saved).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn tab_completion_descends_into_directories() {
+        let _cwd = CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let dir = completion_tree("descend");
+        let saved = std::env::current_dir().unwrap();
+        let mut ed = ed_in(&dir);
+        ed.cmdline = "e s".to_string();
+        ed.complete_next();
+        assert_eq!(ed.cmdline, "e src/");
+        assert_eq!(completion_names(&ed), vec!["main.rs"]);
+        ed.complete_next();
+        assert_eq!(ed.cmdline, "e src/main.rs");
+        std::env::set_current_dir(&saved).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn deleting_the_inserted_text_relists_the_directory() {
+        let _cwd = CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let dir = completion_tree("relist");
+        let saved = std::env::current_dir().unwrap();
+        let mut ed = ed_in(&dir);
+        press(
+            &mut ed,
+            &[ch('e'), winit::keyboard::NamedKey::Space.into(), ch('b')],
+        );
+        assert!(ed.completions.is_none());
+        press(&mut ed, &[winit::keyboard::NamedKey::Tab.into()]);
+        assert_eq!(completion_names(&ed).len(), 2);
+        let dels = ed.cmdline.chars().count() - 2;
+        for _ in 0..dels {
+            press(&mut ed, &[winit::keyboard::NamedKey::Backspace.into()]);
+        }
+        assert_eq!(ed.cmdline, "e ");
+        assert_eq!(completion_names(&ed).len(), 4);
+        std::env::set_current_dir(&saved).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn escape_hides_the_completion_list_before_the_command_line() {
+        let _cwd = CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let dir = completion_tree("escape");
+        let saved = std::env::current_dir().unwrap();
+        let mut ed = ed_in(&dir);
+        ed.cmdline = "e beta".to_string();
+        ed.complete_next();
+        let typed = ed.cmdline.clone();
+        press(&mut ed, &[winit::keyboard::NamedKey::Escape.into()]);
+        assert!(ed.completions.is_none());
+        assert_eq!(ed.cmdline, typed);
+        assert_eq!(
+            ed.mode,
+            crate::mode::Mode::Command(crate::mode::CmdKind::Ex)
+        );
+        press(&mut ed, &[winit::keyboard::NamedKey::Escape.into()]);
+        assert_eq!(ed.mode, crate::mode::Mode::Normal);
+        assert!(ed.cmdline.is_empty());
+        std::env::set_current_dir(&saved).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn only_edit_and_pwd_get_path_completions() {
+        assert_eq!(completion_target("w alpha"), None);
+        assert_eq!(completion_target("e"), None);
+        assert_eq!(completion_target("beta.rs"), None);
+        assert_eq!(
+            completion_target("pwd sr"),
+            Some(("pwd ".into(), String::new(), "sr".into()))
+        );
+        assert_eq!(
+            completion_target("edit src/ma"),
+            Some(("edit src/".into(), "src/".into(), "ma".into()))
+        );
     }
 }

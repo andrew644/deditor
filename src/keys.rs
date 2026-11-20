@@ -13,7 +13,7 @@ pub fn on_key(ed: &mut Editor, ev: &KeyEvent, mods: ModifiersState) {
     key_down(ed, &ev.logical_key, mods);
 }
 
-fn key_down(ed: &mut Editor, key: &Key, mods: ModifiersState) {
+pub(crate) fn key_down(ed: &mut Editor, key: &Key, mods: ModifiersState) {
     if is_modifier(key) {
         return;
     }
@@ -752,7 +752,9 @@ fn command_key(ed: &mut Editor, key: &Key, mods: ModifiersState) {
     if mods.alt_key() || mods.super_key() {
         return;
     }
+    let ex = ed.cmd_kind == Some(crate::mode::CmdKind::Ex);
     match key {
+        Key::Named(NamedKey::Escape) if ed.completions.is_some() => ed.completions = None,
         Key::Named(NamedKey::Escape) => ed.close_cmdline(),
         Key::Named(NamedKey::Enter) => match ed.cmd_kind {
             Some(crate::mode::CmdKind::Ex) => ed.execute_cmdline(),
@@ -760,17 +762,31 @@ fn command_key(ed: &mut Editor, key: &Key, mods: ModifiersState) {
             Some(crate::mode::CmdKind::SearchBack) => ed.commit_search(true),
             None => ed.close_cmdline(),
         },
+        Key::Named(NamedKey::Tab) if ex => {
+            if mods.shift_key() {
+                ed.completion_move(-1);
+            } else {
+                ed.complete_next();
+            }
+        }
+        Key::Named(NamedKey::ArrowDown) if ex => ed.completion_move(1),
+        Key::Named(NamedKey::ArrowUp) if ex => ed.completion_move(-1),
         Key::Named(NamedKey::Backspace) => {
             ed.cmdline.pop();
+            ed.sync_completions();
         }
         Key::Character(s) => {
             if let Some(c) = s.chars().next()
                 && !c.is_control()
             {
                 ed.cmdline.push(c);
+                ed.sync_completions();
             }
         }
-        Key::Named(NamedKey::Space) => ed.cmdline.push(' '),
+        Key::Named(NamedKey::Space) => {
+            ed.cmdline.push(' ');
+            ed.sync_completions();
+        }
         _ => {}
     }
 }

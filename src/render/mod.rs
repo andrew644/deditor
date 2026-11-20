@@ -718,6 +718,51 @@ pub fn draw_content(
         }
     }
 
+    let mut cpl_s = String::new();
+    let mut cpl_pos = None;
+    if let Some(cp) = &ed.completions {
+        let max_rows = 8usize;
+        let start = cp.cursor.saturating_sub(max_rows - 1);
+        let sel_row = cp.cursor - start;
+        let box_cols = ((l.cols as usize) / 2).clamp(24, (l.cols as usize).max(24));
+        for (row, &idx) in cp.order.iter().skip(start).take(max_rows).enumerate() {
+            if row > 0 {
+                cpl_s.push('\n');
+            }
+            cpl_s.push_str(&pad_line(
+                &format!(
+                    "{}{}",
+                    if row == sel_row { "> " } else { "  " },
+                    cp.items[idx]
+                ),
+                box_cols,
+            ));
+        }
+        let (cx, cy, box_w, box_h) = completion_box(
+            ed.cmdline.chars().count(),
+            room,
+            cpl_s.lines().count(),
+            box_cols,
+            (w, h),
+            (cw, ch),
+        );
+        cpl_pos = Some((cx, cy));
+        overlay.push(rects::RectInstance {
+            x: cx,
+            y: cy,
+            w: box_w,
+            h: box_h,
+            color: theme.popup_bg,
+        });
+        overlay.push(rects::RectInstance {
+            x: cx,
+            y: cy + sel_row as f32 * ch,
+            w: box_w,
+            h: ch,
+            color: theme.popup_sel,
+        });
+    }
+
     let mut tb_tab = mkbuf(ts, &tab_text, w, h);
     let mut tb_gutter = mkbuf(ts, &gutter_s, w, h);
     let mut tb_body = mkbuf(ts, &body_s, w, h);
@@ -727,6 +772,7 @@ pub fn draw_content(
     let mut tb_hover = mkbuf(ts, &hover_s, w, h);
     let mut tb_comp = mkbuf(ts, &comp_s, w, h);
     let mut tb_menu = mkbuf(ts, &menu_s, w, h);
+    let mut tb_cpl = mkbuf(ts, &cpl_s, w, h);
 
     let areas: Vec<(&mut Buffer, f32, f32, u32)> = vec![
         (&mut tb_tab as &mut Buffer, 0.0f32, 0.0f32, theme.fg),
@@ -738,6 +784,9 @@ pub fn draw_content(
     let mut oareas: Vec<(&mut Buffer, f32, f32, u32)> = Vec::new();
     if popup_open {
         oareas.push((&mut tb_popup, cw, ch, theme.popup_fg));
+    }
+    if let Some((px, py)) = cpl_pos {
+        oareas.push((&mut tb_cpl, px, py, theme.popup_fg));
     }
     if let Some((hx, hy)) = hover_pos {
         oareas.push((&mut tb_hover, hx, hy, theme.popup_fg));
@@ -859,6 +908,24 @@ fn draw_layer(
     renderer.render(atlas, viewport, &mut pass).unwrap();
 }
 
+fn completion_box(
+    typed: usize,
+    room: usize,
+    rows: usize,
+    box_cols: usize,
+    screen: (f32, f32),
+    cell: (f32, f32),
+) -> (f32, f32, f32, f32) {
+    let (w, h) = screen;
+    let (cw, ch) = cell;
+    let box_w = box_cols as f32 * cw;
+    let box_h = rows as f32 * ch;
+    let cells = typed.min(room) + 3;
+    let x = (cells as f32 * cw).min((w - box_w).max(0.0));
+    let y = (h - box_h - ch).max(0.0);
+    (x, y, box_w, box_h)
+}
+
 fn pending_label(ed: &crate::app::Editor) -> String {
     use crate::mode::Pending;
     let mut s = String::new();
@@ -958,6 +1025,22 @@ fn pad_line(s: &str, cols: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn completion_box_sits_beside_the_command_line_without_covering_it() {
+        let cell = (8.0, 16.0);
+        let screen = (800.0, 480.0);
+        let (x, y, w, h) = completion_box(6, 78, 3, 40, screen, cell);
+        assert_eq!((x, y, w, h), (9.0 * 8.0, 480.0 - 4.0 * 16.0, 320.0, 48.0));
+        let (x, _, w, _) = completion_box(70, 78, 3, 40, screen, cell);
+        assert!(x + w <= screen.0);
+        for rows in 1..=8 {
+            let (x, y, w, h) = completion_box(6, 78, rows, 40, screen, cell);
+            assert!(x >= 9.0 * cell.0);
+            assert!(y + h <= screen.1 - cell.1);
+            assert_eq!(w, 40.0 * cell.0);
+        }
+    }
 
     fn glyph_xs(fonts: &mut FontSystem, family: Family<'_>, text: &str) -> Vec<f32> {
         let mut buf = Buffer::new(fonts, Metrics::new(14.0, 18.9));
