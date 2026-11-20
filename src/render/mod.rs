@@ -262,7 +262,7 @@ pub fn gutter_parts(b: &crate::buffer::Buffer, line_numbers: bool, signs: bool) 
     (numbers, if signs { 2 } else { 0 })
 }
 
-/// Width of the `date author` column that `F4` puts left of the line numbers.
+/// Width of the `date author` column that `F5` puts left of the line numbers.
 pub const BLAME_W: usize = 22;
 
 fn blame_text(e: Option<&crate::git::BlameLine>, w: usize) -> String {

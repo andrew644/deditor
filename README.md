@@ -224,7 +224,7 @@ same), `../` moves the root up, `~/` starts at the home directory, and `/path/`
 makes an absolute path the root.
 
 Files and directories that git ignores (`.gitignore`, `.git/info/exclude` and the
-configured global ignore file) are left out of the list; `F5` toggles them back
+configured global ignore file) are left out of the list; `F4` toggles them back
 in. Ignored directories are never walked. Path completion for `:e` and `:pwd` is
 not filtered and lists everything.
 
@@ -235,7 +235,7 @@ against the last commit: green `+` for added lines, yellow `~` for modified
 ones, and red `-` on the line below a deletion. Signs recompute when you leave
 insert mode; set `git_signs: false` to drop the column entirely.
 
-`F4` adds a `date author` column on the left showing who last changed each
+`F5` adds a `date author` column on the left showing who last changed each
 line. The blame runs on the buffer's own text, so lines keep their author while
 the file has unsaved edits; lines that are in no commit stay blank.
 
@@ -246,8 +246,8 @@ the file has unsaved edits; lines that are in no commit stay blank.
 | `F1` | toggle spellcheck |
 | `F2` | toggle whitespace display |
 | `F3` | toggle dark / light theme |
-| `F4` | show / hide git blame |
-| `F5` | show / hide git-ignored files in the file panel |
+| `F4` | show / hide git-ignored files in the file panel |
+| `F5` | show / hide git blame |
 
 Mouse: wheel scrolls, left-click switches tabs, right-click opens a context
 menu of relevant keys for the word under the pointer (e.g. `gd`, `K`, `viw`).

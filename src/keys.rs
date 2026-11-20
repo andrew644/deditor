@@ -22,7 +22,7 @@ pub(crate) fn key_down(ed: &mut Editor, key: &Key, mods: ModifiersState) {
         ed.toggle_spell();
         return;
     }
-    if *key == Key::Named(NamedKey::F5) {
+    if *key == Key::Named(NamedKey::F4) {
         ed.toggle_ignored();
         return;
     }
@@ -35,7 +35,7 @@ pub(crate) fn key_down(ed: &mut Editor, key: &Key, mods: ModifiersState) {
         );
         return;
     }
-    if *key == Key::Named(NamedKey::F4) {
+    if *key == Key::Named(NamedKey::F5) {
         ed.toggle_blame();
         return;
     }
@@ -1631,25 +1631,25 @@ mod tests {
     }
 
     #[test]
-    fn f5_toggles_ignored_files() {
+    fn f4_toggles_ignored_files() {
         let mut ed = Editor::test_new();
         assert!(!ed.show_ignored);
-        type_keys(&mut ed, &[Key::Named(NamedKey::F5)]);
+        type_keys(&mut ed, &[Key::Named(NamedKey::F4)]);
         assert!(ed.show_ignored);
         assert_eq!(ed.status.as_deref(), Some("ignored files: shown"));
-        type_keys(&mut ed, &[Key::Named(NamedKey::F5)]);
+        type_keys(&mut ed, &[Key::Named(NamedKey::F4)]);
         assert!(!ed.show_ignored);
         assert_eq!(ed.status.as_deref(), Some("ignored files: hidden"));
     }
 
     #[test]
-    fn f4_toggles_git_blame() {
+    fn f5_toggles_git_blame() {
         let mut ed = Editor::test_new();
         assert!(!ed.show_blame);
-        type_keys(&mut ed, &[Key::Named(NamedKey::F4)]);
+        type_keys(&mut ed, &[Key::Named(NamedKey::F5)]);
         assert!(ed.show_blame);
         assert_eq!(ed.status.as_deref(), Some("git blame: on"));
-        type_keys(&mut ed, &[Key::Named(NamedKey::F4)]);
+        type_keys(&mut ed, &[Key::Named(NamedKey::F5)]);
         assert!(!ed.show_blame);
         assert_eq!(ed.status.as_deref(), Some("git blame: off"));
     }
