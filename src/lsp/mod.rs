@@ -7,13 +7,16 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-pub const SEV_ERROR: u32 = 1;
-pub const SEV_WARN: u32 = 2;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Sev {
+    Error,
+    Warn,
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Diag {
     pub line: usize,
-    pub severity: u32,
+    pub severity: Sev,
     pub message: String,
 }
 
@@ -383,9 +386,10 @@ impl LspManager {
                             })
                             .map(|d| Diag {
                                 line: d.range.start.line as usize,
-                                severity: match d.severity {
-                                    Some(s) if s == lt::DiagnosticSeverity::WARNING => SEV_WARN,
-                                    _ => SEV_ERROR,
+                                severity: if d.severity == Some(lt::DiagnosticSeverity::WARNING) {
+                                    Sev::Warn
+                                } else {
+                                    Sev::Error
                                 },
                                 message: d.message.clone(),
                             })

@@ -697,10 +697,9 @@ pub fn draw_content(
                 y: wy + row as f32 * ch,
                 w: 4.0f32.max(cw * 0.35),
                 h: ch,
-                color: if d.severity == crate::lsp::SEV_WARN {
-                    theme.warn
-                } else {
-                    theme.error
+                color: match d.severity {
+                    crate::lsp::Sev::Warn => theme.warn,
+                    crate::lsp::Sev::Error => theme.error,
                 },
             });
         }
@@ -788,10 +787,9 @@ pub fn draw_content(
     let cur_x = ox + (gutter + wrap.pos(&cur_line, buf.cursor.col).1) as f32 * cw;
     let diags = ed.lsp.diags_for(buf.path.as_ref());
     let cursor_diag = diags.iter().find(|d| d.line == buf.cursor.line).map(|d| {
-        let tag = if d.severity == crate::lsp::SEV_WARN {
-            "WARN"
-        } else {
-            "ERR"
+        let tag = match d.severity {
+            crate::lsp::Sev::Warn => "WARN",
+            crate::lsp::Sev::Error => "ERR",
         };
         format!("{tag}: {}", d.message.replace('\n', " "))
     });
