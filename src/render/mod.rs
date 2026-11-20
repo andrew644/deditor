@@ -813,7 +813,7 @@ pub fn draw_content(
             s
         }
     };
-    let left_s = fit(&left_s, room);
+    let left_s = take_cells(&left_s, room);
     let right_s = format!("{ruler}  {mode_label}");
     let left_color = if ed.cmd_kind.is_none() && ed.status_err && !msg.is_empty() {
         theme.error
@@ -1283,10 +1283,6 @@ fn take_cells(s: &str, room: usize) -> String {
     out
 }
 
-fn fit(s: &str, room: usize) -> String {
-    take_cells(s, room)
-}
-
 /// Half-open cell span `[from, to)` the visual selection covers on `line`.
 /// `sa` and `sb` are the inclusive anchor and exclusive end from
 /// `Editor::sel_range`. `None` for from means the row's first cell, and
@@ -1593,7 +1589,7 @@ mod tests {
         assert_eq!(cells("日本語"), 6);
         assert_eq!(cells("a😀b"), 4);
         assert_eq!(cells("e\u{301}"), 1);
-        assert_eq!(fit("日本語", 4), "日本");
+        assert_eq!(take_cells("日本語", 4), "日本");
         assert_eq!(pad_line("日本", 6), "日本  ");
         assert_eq!(pad_line("日本語", 6), "日本語");
         assert_eq!(elide_path("src/日本語.rs", 7), "…語.rs");
