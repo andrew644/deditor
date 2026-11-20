@@ -8,11 +8,26 @@ use std::sync::Arc;
 use winit::event_loop::ActiveEventLoop;
 use winit::window::Window;
 
-/// A frame could not be painted, usually because the surface went out of date
-/// while the window was resized. The caller drops the frame and asks for
-/// another one instead of taking the editor down with unsaved buffers.
+/// A frame could not be painted. The frame is dropped instead of taking the
+/// editor down with unsaved buffers in it.
 #[derive(Debug)]
-pub struct PaintError(pub String);
+pub enum PaintError {
+    /// The glyph atlas is full. Another frame would fail the same way, so the
+    /// caller waits for the next real event to repaint rather than spinning.
+    AtlasFull,
+    /// The text cache changed underneath this frame - a resize, or a glyph
+    /// trimmed from the atlas - and the next frame prepares it again.
+    Retry,
+}
+
+impl std::fmt::Display for PaintError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::AtlasFull => f.write_str("glyph atlas is full"),
+            Self::Retry => f.write_str("text cache changed under this frame"),
+        }
+    }
+}
 
 pub struct Gpu {
     pub instance: wgpu::Instance,
@@ -1092,7 +1107,7 @@ pub fn draw_content(
     if let Some((mx, my)) = menu_pos {
         oareas.push((&mut tb_menu, mx, my, theme.popup_fg));
     }
-    draw_layer(
+    let mut painted = draw_layer(
         gpu,
         ts,
         rp,
@@ -1104,9 +1119,9 @@ pub fn draw_content(
             rects,
             areas,
         },
-    )?;
-    if !overlay.is_empty() || !oareas.is_empty() {
-        draw_layer(
+    );
+    if painted.is_ok() && (!overlay.is_empty() || !oareas.is_empty()) {
+        painted = draw_layer(
             gpu,
             ts,
             rp,
@@ -1118,10 +1133,12 @@ pub fn draw_content(
                 rects: overlay,
                 areas: oareas,
             },
-        )?;
+        );
     }
+    // The atlas is trimmed even when the frame was lost: a full atlas only
+    // recovers once the space it was holding is released.
     ts.atlas.trim();
-    Ok(())
+    painted
 }
 
 /// One paint pass: its rects, then its text. Drawing a popup's opaque
@@ -1200,10 +1217,10 @@ fn draw_layer(
             }),
             swash_cache,
         )
-        .map_err(|e| PaintError(e.to_string()))?;
+        .map_err(|_| PaintError::AtlasFull)?;
     renderer
         .render(atlas, viewport, &mut pass)
-        .map_err(|e| PaintError(e.to_string()))?;
+        .map_err(|_| PaintError::Retry)?;
     Ok(())
 }
 

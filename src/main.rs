@@ -533,10 +533,14 @@ impl App {
         if let Err(e) = render::draw_content(gpu, text, rects, ed, &view, &mut encoder) {
             if !self.paint_warned {
                 self.paint_warned = true;
-                eprintln!("deditor: {}", e.0);
+                eprintln!("deditor: {e}");
             }
-            gpu.configure(gpu.config.width, gpu.config.height);
-            if let Some(w) = &self.window {
+            // A cache that changed underneath the frame is rebuilt by the next
+            // one. A full atlas is not, so the frame is dropped and the next
+            // real event repaints instead of the editor spinning on it.
+            if matches!(e, render::PaintError::Retry)
+                && let Some(w) = &self.window
+            {
                 w.request_redraw();
             }
             return;
