@@ -215,6 +215,13 @@ configured global ignore file) are left out of the list; `F5` toggles them back
 in. Ignored directories are never walked. Path completion for `:e` and `:pwd` is
 not filtered and lists everything.
 
+## Git
+
+Files in a working tree show change signs in the gutter, diffed with libgit2
+against the last commit: green `+` for added lines, yellow `~` for modified
+ones, and red `-` on the line below a deletion. Signs recompute when you leave
+insert mode; set `git_signs: false` to drop the column entirely.
+
 ## Global
 
 | Key | Action |
@@ -233,8 +240,8 @@ Config file: `~/.config/deditor/config.yaml`
 (`%LOCALAPPDATA%\deditor\config.yaml` on Windows), override location with
 `DEDITOR_CONFIG=/path/to/file`. See [config.example.yaml](config.example.yaml)
 for every key (font, tab width, line numbers, clipboard sync, whitespace
-display, spellcheck, and a full color theme). `:settings` edits these live and
-saves on change. Spellcheck (`F1`) underlines words the built-in English
+display, spellcheck, git signs, and a full color theme). `:settings` edits these
+live and saves on change. Spellcheck (`F1`) underlines words the built-in English
 dictionary does not know — no external program or dictionary package is needed.
 Point `spell_dict` at a personal word list to whitelist project names and
 jargon.

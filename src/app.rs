@@ -534,6 +534,36 @@ impl Editor {
         }
     }
 
+    pub fn refresh_signs(&mut self) {
+        if self.mode == Mode::Insert {
+            return;
+        }
+        let mut seen: Vec<usize> = Vec::new();
+        for w in &self.windows {
+            let b = w.cur_buf();
+            if seen.contains(&b) || self.buffers[b].sign_rev == self.buffers[b].revision {
+                continue;
+            }
+            seen.push(b);
+            let enabled = self.config.git_signs;
+            let path = self.buffers[b].path.clone();
+            let buf = &mut self.buffers[b];
+            buf.sign_rev = buf.revision;
+            buf.signs = match (&path, enabled) {
+                (Some(p), true) => crate::git::changes(p, &buf.rope.to_string()),
+                _ => Vec::new(),
+            };
+        }
+    }
+
+    pub fn has_signs(&self, b: usize) -> bool {
+        self.config.git_signs
+            && self.buffers[b]
+                .signs
+                .iter()
+                .any(|s| *s != crate::git::Sign::None)
+    }
+
     pub fn center_cursor(&mut self, rows: usize) {
         let rows = rows.max(1);
         let wrap = self.wrap();
@@ -2184,6 +2214,76 @@ mod tests {
         let mut ed = Editor::test_new();
         ed.buf_mut().insert_text(s, false);
         ed
+    }
+
+    fn git_repo(tag: &str, body: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("deditor_signs_{tag}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("f.txt");
+        std::fs::write(&file, body).unwrap();
+        let repo = git2::Repository::init(&dir).unwrap();
+        let mut idx = repo.index().unwrap();
+        idx.add_path(std::path::Path::new("f.txt")).unwrap();
+        idx.write().unwrap();
+        let tree = repo.find_tree(idx.write_tree().unwrap()).unwrap();
+        let sig = git2::Signature::now("t", "t@example.com").unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
+            .unwrap();
+        file
+    }
+
+    fn editor_on(tag: &str) -> (Editor, std::path::PathBuf) {
+        let f = git_repo(tag, "one\ntwo\nthree\n");
+        let mut ed = Editor::test_new();
+        ed.buffers[0] = crate::buffer::Buffer::load(&f).unwrap();
+        ed.buf_mut().cursor = Pos { line: 1, col: 0 };
+        ed.buf_mut().insert_text("new\n", false);
+        (ed, f)
+    }
+
+    #[test]
+    fn signs_wait_until_insert_ends() {
+        let (mut ed, _) = editor_on("typing");
+        ed.mode = Mode::Insert;
+        ed.refresh_signs();
+        assert!(
+            ed.buffers[0].signs.is_empty(),
+            "the diff must not run on every keystroke"
+        );
+        ed.mode = Mode::Normal;
+        ed.refresh_signs();
+        assert_eq!(
+            ed.buffers[0].signs,
+            vec![
+                crate::git::Sign::None,
+                crate::git::Sign::Added,
+                crate::git::Sign::None,
+                crate::git::Sign::None,
+            ]
+        );
+        assert!(ed.has_signs(0));
+    }
+
+    #[test]
+    fn disabling_signs_clears_the_gutter() {
+        let (mut ed, _) = editor_on("off");
+        ed.refresh_signs();
+        assert!(ed.has_signs(0));
+        ed.config.git_signs = false;
+        ed.buffers[0].sign_rev = u64::MAX;
+        ed.refresh_signs();
+        assert!(ed.buffers[0].signs.is_empty());
+        assert!(!ed.has_signs(0));
+    }
+
+    #[test]
+    fn buffer_without_a_file_has_no_signs() {
+        let mut ed = Editor::test_new();
+        ed.buf_mut().insert_text("hello\n", false);
+        ed.refresh_signs();
+        assert!(ed.buffers[0].signs.is_empty());
+        assert!(!ed.has_signs(0));
     }
 
     #[test]

@@ -225,12 +225,13 @@ pub fn tab_label(i: usize, b: &crate::buffer::Buffer) -> String {
     )
 }
 
-pub fn gutter_for(b: &crate::buffer::Buffer, line_numbers: bool) -> u32 {
-    if line_numbers {
+pub fn gutter_for(b: &crate::buffer::Buffer, line_numbers: bool, signs: bool) -> u32 {
+    let numbers = if line_numbers {
         (b.rope.len_lines().max(1).to_string().len() as u32) + 2
     } else {
         0
-    }
+    };
+    numbers + if signs { 2 } else { 0 }
 }
 
 pub struct TabHit {
@@ -285,7 +286,11 @@ impl Layout {
             .into_iter()
             .filter_map(|(win, r)| {
                 let w = ed.windows.get(win)?;
-                let gutter = gutter_for(&ed.buffers[w.cur_buf()], ed.config.line_numbers);
+                let gutter = gutter_for(
+                    &ed.buffers[w.cur_buf()],
+                    ed.config.line_numbers,
+                    ed.has_signs(w.cur_buf()),
+                );
                 Some(WinRect {
                     win,
                     x: r.x,
@@ -338,6 +343,7 @@ pub fn draw_content(
     struct Strip {
         tabs: String,
         gutter: String,
+        sign: [String; 3],
         body: String,
         x: f32,
         y: f32,
@@ -543,17 +549,31 @@ pub fn draw_content(
 
         let mut gutter_s = String::new();
         let mut body_s = String::new();
+        let mut sign_s = [String::new(), String::new(), String::new()];
+        let sign_w = 2 * usize::from(ed.has_signs(win.cur_buf()));
+        let num_w = gutter.saturating_sub(sign_w);
         for (r, row) in rows.iter().enumerate() {
             if row.line < buf.rope.len_lines() {
                 if wr.gutter > 0 {
                     if row.first() {
-                        gutter_s.push_str(&format!(
-                            "{:>w$} ",
-                            row.line + 1,
-                            w = gutter.saturating_sub(1)
-                        ));
+                        gutter_s.push_str(&" ".repeat(sign_w));
+                        if num_w > 0 {
+                            gutter_s.push_str(&format!("{:>w$} ", row.line + 1, w = num_w - 1));
+                        }
                     } else {
                         gutter_s.push_str(&" ".repeat(gutter));
+                    }
+                }
+                if sign_w > 0 {
+                    let mark = match buf.signs.get(row.line) {
+                        Some(crate::git::Sign::Added) => 0,
+                        Some(crate::git::Sign::Modified) => 1,
+                        Some(crate::git::Sign::Deleted) => 2,
+                        _ => 3,
+                    };
+                    for (i, s) in sign_s.iter_mut().enumerate() {
+                        s.push(if mark == i { ['+', '~', '-'][i] } else { ' ' });
+                        s.push(' ');
                     }
                 }
                 let raw = crate::buffer::line_text(&buf.rope, row.line);
@@ -562,6 +582,9 @@ pub fn draw_content(
             if r + 1 < rows.len() {
                 gutter_s.push('\n');
                 body_s.push('\n');
+                for s in sign_s.iter_mut() {
+                    s.push('\n');
+                }
             }
         }
         for d in ed.lsp.diags_for(buf.path.as_ref()) {
@@ -594,6 +617,7 @@ pub fn draw_content(
         strips.push(Strip {
             tabs: tab_text,
             gutter: gutter_s,
+            sign: sign_s,
             body: body_s,
             x: ox,
             y: oy,
@@ -942,12 +966,15 @@ pub fn draw_content(
     let mut tb_menu = mkbuf(ts, &menu_s, w, h);
     let mut tb_cpl = mkbuf(ts, &cpl_s, w, h);
 
-    let mut strip_bufs: Vec<[Buffer; 3]> = strips
+    let mut strip_bufs: Vec<[Buffer; 6]> = strips
         .iter()
         .map(|s| {
             [
                 mkbuf(ts, &s.tabs, s.bw.max(1.0), ch),
                 mkbuf(ts, &s.gutter, s.bw.max(1.0), s.bh.max(1.0)),
+                mkbuf(ts, &s.sign[0], s.bw.max(1.0), s.bh.max(1.0)),
+                mkbuf(ts, &s.sign[1], s.bw.max(1.0), s.bh.max(1.0)),
+                mkbuf(ts, &s.sign[2], s.bw.max(1.0), s.bh.max(1.0)),
                 mkbuf(
                     ts,
                     &s.body,
@@ -959,7 +986,7 @@ pub fn draw_content(
         .collect();
     let mut areas: Vec<(&mut Buffer, f32, f32, u32)> = Vec::new();
     for (s, bs) in strips.iter().zip(strip_bufs.iter_mut()) {
-        let [tab, gutter_b, body] = bs;
+        let [tab, gutter_b, add, change, delete, body] = bs;
         areas.push((
             tab,
             s.x,
@@ -967,6 +994,9 @@ pub fn draw_content(
             if s.focused { theme.fg } else { theme.gutter_fg },
         ));
         areas.push((gutter_b, s.x, s.y + ch, theme.gutter_fg));
+        areas.push((add, s.x, s.y + ch, theme.sign_add));
+        areas.push((change, s.x, s.y + ch, theme.sign_change));
+        areas.push((delete, s.x, s.y + ch, theme.sign_delete));
         areas.push((body, s.x + s.gutter_cols as f32 * cw, s.y + ch, theme.fg));
     }
     areas.push((&mut tb_msg, 0.0, h - ch, left_color));
@@ -1233,6 +1263,16 @@ mod tests {
         assert_eq!(elide_path("src/mod.rs", 20), "src/mod.rs");
         assert_eq!(elide_path("src/lsp/client.rs", 10), "…client.rs");
         assert_eq!(elide_path("deep/nested/path/file.txt", 1), "…");
+    }
+
+    #[test]
+    fn sign_column_widens_the_gutter_only_when_used() {
+        let mut b = crate::buffer::Buffer::empty();
+        b.insert_text("one\ntwo\nthree\n", false);
+        assert_eq!(gutter_for(&b, true, false), 3);
+        assert_eq!(gutter_for(&b, true, true), 5);
+        assert_eq!(gutter_for(&b, false, false), 0);
+        assert_eq!(gutter_for(&b, false, true), 2);
     }
 
     #[test]

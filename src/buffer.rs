@@ -32,6 +32,8 @@ pub struct Buffer {
     pub redo: Vec<UndoEntry>,
     pub crlf: bool,
     pub revision: u64,
+    pub signs: Vec<crate::git::Sign>,
+    pub sign_rev: u64,
 }
 
 pub fn line_chars(rope: &Rope, line: usize) -> usize {
@@ -116,6 +118,8 @@ impl Buffer {
             redo: Vec::new(),
             crlf: false,
             revision: 0,
+            signs: Vec::new(),
+            sign_rev: u64::MAX,
         }
     }
 

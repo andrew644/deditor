@@ -49,20 +49,16 @@ pub struct Grouper {
 }
 
 impl Grouper {
+    /// Start of a hunk. Deletions left over from the previous hunk belong
+    /// where that hunk began, not here.
     pub fn hunk(&mut self, first: usize) {
         self.flush();
+        self.take_pending(self.anchor);
         self.anchor = first;
-        if self.pending > 0 {
-            self.groups.push(Group {
-                line: first,
-                added: 0,
-                removed: self.pending,
-            });
-            self.pending = 0;
-        }
     }
 
     pub fn add(&mut self, index: usize) {
+        self.anchor = index;
         match self.open {
             Some(g) if g.removed == 0 && g.line + g.added == index && self.pending == 0 => {
                 if let Some(g) = self.open.as_mut() {
@@ -87,20 +83,28 @@ impl Grouper {
         self.pending += 1;
     }
 
+    /// A context line: deletions before it are marked on it.
     pub fn ctx(&mut self, index: usize) {
-        self.hunk(index);
+        self.flush();
+        self.take_pending(index);
+        self.anchor = index;
     }
 
     pub fn finish(mut self, lines: usize) -> Vec<Group> {
         self.flush();
+        self.take_pending(self.anchor.min(lines));
+        self.groups
+    }
+
+    fn take_pending(&mut self, line: usize) {
         if self.pending > 0 {
             self.groups.push(Group {
-                line: self.anchor.min(lines),
+                line,
                 added: 0,
                 removed: self.pending,
             });
+            self.pending = 0;
         }
-        self.groups
     }
 
     fn flush(&mut self) {
@@ -320,6 +324,30 @@ mod tests {
         let f = d.join("fresh.txt");
         std::fs::write(&f, BASE).unwrap();
         assert_eq!(changes(&f, BASE), vec![Sign::None; 5]);
+    }
+
+    #[test]
+    fn deletion_before_a_later_hunk_stays_at_the_gap() {
+        let d = dir("gap");
+        let base: String = (1..=25).map(|i| format!("line {i}\n")).collect();
+        let f = repo_committed(&d, "f.txt", &base);
+        let mut lines: Vec<String> = (1..=25).map(|i| format!("line {i}")).collect();
+        lines.insert(3, "brand new line".into());
+        lines.insert(4, "another new line".into());
+        lines[10] = "rewritten".into();
+        lines.remove(13);
+        lines[16] = "also rewritten".into();
+        let text = lines.join("\n") + "\n";
+        let s = changes(&f, &text);
+        assert_eq!(s[3], Sign::Added);
+        assert_eq!(s[4], Sign::Added);
+        assert_eq!(s[10], Sign::Modified);
+        assert_eq!(
+            s.iter().position(|x| *x == Sign::Deleted),
+            Some(13),
+            "the marker must sit on the line below the gap: {s:?}"
+        );
+        assert_eq!(s[16], Sign::Modified);
     }
 
     #[test]

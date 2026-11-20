@@ -1,4 +1,3 @@
 # TODO
-- Show git changes on the side. green +, red -, yellow ~ for add remove modify. Don't call git commands for git features. If needed use something like libgit2 or its rust binding.
 - Toggle git blame with f4. Show date/user on the left side. Don't call git commands for git features. If needed use something like libgit2 or its rust binding.
 - If you complete all other items, do code review on the codebase and fix tech debt. Don't delete this item.

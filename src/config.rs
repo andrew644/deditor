@@ -23,6 +23,9 @@ macro_rules! for_each_theme_color {
             [accent, "#82aaff", 0xFF82AAFF],
             [error, "#ff757f", 0xFFFF757F],
             [warn, "#ffc777", 0xFFFFC777],
+            [sign_add, "#c3e88d", 0xFFC3E88D],
+            [sign_change, "#ffc777", 0xFFFFC777],
+            [sign_delete, "#ff757f", 0xFFFF757F],
             [popup_bg, "#262a3f", 0xFF262A3F],
             [popup_fg, "#c8d3f5", 0xFFC8D3F5],
             [popup_sel, "#2d3f76", 0xFF2D3F76]
@@ -63,9 +66,7 @@ macro_rules! theme_functions {
             $(pub $n: u32,)*
         }
 
-        pub const PALETTE: [&'static str; 14] = [
-            $($h,)*
-        ];
+        pub const PALETTE: &[&'static str] = &[$($h,)*];
 
         /// Inverts every channel so the palette swaps between dark and light. Hues
         /// rotate but keep their contrast, and the transform is its own inverse.
@@ -128,6 +129,7 @@ pub struct Config {
     pub show_whitespace: bool,
     pub spellcheck: bool,
     pub spell_dict: String,
+    pub git_signs: bool,
 }
 
 impl Default for Config {
@@ -141,6 +143,7 @@ impl Default for Config {
             show_whitespace: false,
             spellcheck: false,
             spell_dict: String::new(),
+            git_signs: true,
         }
     }
 }
@@ -226,7 +229,7 @@ pub const FONT_FAMILIES: [&str; 4] = [
 
 macro_rules! theme_settings {
     ($([$n:ident, $h:literal, $r:literal]),*) => {
-        pub const SETTINGS: [&str; 21] = [
+        pub const SETTINGS: [&str; 25] = [
             "font.family",
             "font.size",
             "tab_width",
@@ -234,6 +237,7 @@ macro_rules! theme_settings {
             "clipboard",
             "show_whitespace",
             "spellcheck",
+            "git_signs",
             $(concat!("theme.", stringify!($n)),)*
         ];
     };
@@ -257,6 +261,7 @@ pub fn setting_value(cfg: &Config, key: &str) -> String {
         "clipboard" => format!("{}", cfg.clipboard),
         "show_whitespace" => format!("{}", cfg.show_whitespace),
         "spellcheck" => format!("{}", cfg.spellcheck),
+        "git_signs" => format!("{}", cfg.git_signs),
         k if k.starts_with("theme.") => theme_color(&cfg.theme, &k["theme.".len()..])
             .unwrap_or("?")
             .to_string(),
@@ -276,6 +281,7 @@ pub fn setting_activate(cfg: &mut Config, key: &str) {
         "clipboard" => cfg.clipboard = !cfg.clipboard,
         "show_whitespace" => cfg.show_whitespace = !cfg.show_whitespace,
         "spellcheck" => cfg.spellcheck = !cfg.spellcheck,
+        "git_signs" => cfg.git_signs = !cfg.git_signs,
         k if k.starts_with("theme.") => {
             let name = &k["theme.".len()..];
             let cur = theme_color(&cfg.theme, name).map(|s| s.to_string());

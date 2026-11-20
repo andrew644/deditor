@@ -14,6 +14,7 @@ spellcheck: false
 # Optional personal word list: one word per line, # starts a comment. Words here are
 # accepted in addition to the built-in dictionary. Empty disables it.
 spell_dict: ""
+git_signs: true
 
 theme:
   fg: "#c8d3f5"
@@ -27,6 +28,9 @@ theme:
   accent: "#82aaff"
   error: "#ff757f"
   warn: "#ffc777"
+  sign_add: "#c3e88d"
+  sign_change: "#ffc777"
+  sign_delete: "#ff757f"
   popup_bg: "#262a3f"
   popup_fg: "#c8d3f5"
   popup_sel: "#2d3f76"
