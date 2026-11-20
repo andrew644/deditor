@@ -26,11 +26,10 @@ fn clipboard_set(text: &str) -> crate::Result<()> {
 }
 
 fn clipboard_get() -> crate::Result<String> {
-    with_clipboard(|c| c.get_text()).map(|text| {
-        #[cfg(windows)]
-        let text = text.replace("\r\n", "\n");
-        text
-    })
+    let text = with_clipboard(|c| c.get_text())?;
+    #[cfg(windows)]
+    let text = text.replace("\r\n", "\n");
+    Ok(text)
 }
 
 pub fn clipboard_shutdown() {
@@ -256,36 +255,59 @@ impl Editor {
             |line: usize| wrap.row_count(&crate::buffer::line_text(&self.buf().rope, line));
         let cursor = self.buf().cursor;
         let mut top = self.buf().view_top.min(last);
-        let mut sub = self.buf().view_sub;
-        loop {
-            let top_rows = rows_at(top);
-            if sub >= top_rows {
-                sub = top_rows - 1;
+        let mut sub = self.buf().view_sub.min(rows_at(top) - 1);
+        let wc = wrap
+            .pos(
+                &crate::buffer::line_text(&self.buf().rope, cursor.line),
+                cursor.col,
+            )
+            .0;
+        let want_low = rows - 1 - off;
+        let place = |target: usize| -> (usize, usize) {
+            if target <= wc {
+                return (cursor.line, wc - target);
             }
-            let rel = wrap.screen_row(&self.buf().rope, top, sub, cursor);
-            let too_high = cursor.line < top || rel.is_some_and(|r| r < off);
-            let too_low = rel.is_some_and(|r| r > rows - 1 - off);
-            if too_high {
-                if sub > 0 {
-                    sub -= 1;
-                } else if top > 0 {
-                    top -= 1;
-                    sub = rows_at(top) - 1;
+            let mut need = target - wc;
+            let mut line = cursor.line;
+            while need > 0 && line > 0 {
+                line -= 1;
+                let rc = rows_at(line);
+                if need > rc {
+                    need -= rc;
                 } else {
-                    break;
+                    return (line, rc - need);
                 }
-                continue;
             }
-            if too_low {
-                if top == cursor.line || sub + 1 < rows_at(top) {
-                    sub += 1;
-                } else {
-                    top += 1;
-                    sub = 0;
-                }
-                continue;
+            (0, 0)
+        };
+        let target = if cursor.line < top {
+            Some(off)
+        } else if cursor.line == top {
+            let rel = wc.saturating_sub(sub);
+            if rel < off {
+                Some(off)
+            } else if rel > want_low {
+                Some(want_low)
+            } else {
+                None
             }
-            break;
+        } else {
+            let mut rel = wc + (rows_at(top) - sub);
+            let mut line = top + 1;
+            while line < cursor.line && rel <= want_low {
+                rel += rows_at(line);
+                line += 1;
+            }
+            if rel < off {
+                Some(off)
+            } else if rel > want_low {
+                Some(want_low)
+            } else {
+                None
+            }
+        };
+        if let Some(target) = target {
+            (top, sub) = place(target);
         }
         loop {
             let mut used = 0usize;
@@ -579,10 +601,10 @@ impl Editor {
         self.register = text;
         self.reg_linewise = linewise;
         self.reg_block = false;
-        if self.config.clipboard {
-            if let Err(e) = clipboard_set(&self.register) {
-                eprintln!("deditor: clipboard: {e}");
-            }
+        if self.config.clipboard
+            && let Err(e) = clipboard_set(&self.register)
+        {
+            eprintln!("deditor: clipboard: {e}");
         }
     }
 
@@ -2856,5 +2878,29 @@ mod tests {
         {
             assert_eq!(clipboard_get().unwrap(), "external text");
         }
+    }
+
+    #[test]
+    fn jumping_to_document_ends_avoids_scanning_the_buffer() {
+        let mut ed = Editor::test_new();
+        let body: String = (0..120_000).map(|i| format!("line {i}\n")).collect();
+        ed.buf_mut().rope = ropey::Rope::from_str(&body);
+        ed.buf_mut().after_edit();
+        let last = ed.buf().rope.len_lines() - 1;
+        ed.buf_mut().cursor = Pos { line: last, col: 0 };
+        let t = std::time::Instant::now();
+        ed.scroll_to_cursor(50);
+        assert_eq!(ed.buf().view_top, last - 49);
+        assert_eq!(ed.buf().view_sub, 0);
+        assert!(
+            t.elapsed().as_secs() < 2,
+            "scroll_to_cursor took {:?}",
+            t.elapsed()
+        );
+        ed.buf_mut().cursor = Pos { line: 0, col: 0 };
+        let t = std::time::Instant::now();
+        ed.scroll_to_cursor(50);
+        assert_eq!(ed.buf().view_top, 0);
+        assert!(t.elapsed().as_millis() < 500);
     }
 }
