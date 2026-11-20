@@ -3663,6 +3663,19 @@ mod tests {
     }
 
     #[test]
+    fn a_block_paste_past_the_end_adds_the_missing_lines() {
+        let mut ed = ed_with("aa\nbb\n");
+        ed.config.clipboard = false;
+        ed.register = "1\n2\n3".into();
+        ed.reg_block = true;
+        ed.buf_mut().cursor = Pos { line: 1, col: 1 };
+        ed.paste(false);
+        assert_eq!(text(&ed), "aa\nb1b\n 2\n 3");
+        ed.buf_mut().undo();
+        assert_eq!(text(&ed), "aa\nbb\n");
+    }
+
+    #[test]
     fn replace_char_undo_restores_original_char() {
         let mut ed = ed_with("abc");
         ed.buf_mut().cursor = Pos { line: 0, col: 0 };
