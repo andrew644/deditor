@@ -387,13 +387,10 @@ fn normal_key(ed: &mut Editor, key: &Key, mods: ModifiersState) {
         return;
     }
     match k {
-        "h" | "j" | "k" | "l" => {
-            let m = motion_of(k).unwrap();
-            ed.run_motion(m, count);
-        }
-        "w" | "W" | "b" | "B" | "e" | "E" | "0" | "$" | "^" | "%" => {
-            let m = motion_of(k).unwrap();
-            ed.run_motion(m, count);
+        "h" | "j" | "k" | "l" | "w" | "W" | "b" | "B" | "e" | "E" | "0" | "$" | "^" | "%" => {
+            if let Some(m) = motion_of(k) {
+                ed.run_motion(m, count);
+            }
         }
         "G" => ed.run_motion(g_to_line(count, ed.count, false), 1),
         "g" => ed.pending = Pending::G,
@@ -558,7 +555,8 @@ fn visual_key(ed: &mut Editor, k: &str, count: u32) {
             ed.visual_linewise = !ed.visual_linewise;
         }
         "h" | "j" | "k" | "l" | "w" | "W" | "b" | "B" | "e" | "E" | "0" | "^" | "$" | "%" => {
-            let m = match (ed.visual_linewise, motion_of(k).unwrap()) {
+            let Some(plain) = motion_of(k) else { return };
+            let m = match (ed.visual_linewise, plain) {
                 (true, Motion::J) => Motion::LineDown,
                 (true, Motion::K) => Motion::LineUp,
                 (_, other) => other,
