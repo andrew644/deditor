@@ -32,42 +32,40 @@ fn char_at(rope: &Rope, off: usize) -> Option<char> {
     }
 }
 
-fn in_run(c: char, kind: u8) -> bool {
-    match kind {
-        0 => char_is_word(c),
-        1 => !c.is_whitespace(),
-        _ => !c.is_whitespace() && !char_is_word(c),
+/// The character class a word text object runs over.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Run {
+    Word,
+    Other,
+    Blank,
+}
+
+fn run_of(c: char) -> Run {
+    if c.is_whitespace() {
+        Run::Blank
+    } else if char_is_word(c) {
+        Run::Word
+    } else {
+        Run::Other
     }
 }
 
+fn in_run(c: char, run: Run) -> bool {
+    run_of(c) == run
+}
+
 fn word_run(rope: &Rope, cursor: usize) -> Option<(usize, usize)> {
-    let c = char_at(rope, cursor)?;
-    let kind = if c.is_whitespace() {
-        3
-    } else if char_is_word(c) {
-        0
-    } else {
-        2
-    };
+    let run = run_of(char_at(rope, cursor)?);
     let mut start = cursor;
     while start > 0 {
-        let p = char_at(rope, start - 1)?;
-        if kind == 3 {
-            if !p.is_whitespace() {
-                break;
-            }
-        } else if !in_run(p, kind) {
+        if !in_run(char_at(rope, start - 1)?, run) {
             break;
         }
         start -= 1;
     }
     let mut end = cursor + 1;
     while let Some(c2) = char_at(rope, end) {
-        if kind == 3 {
-            if !c2.is_whitespace() {
-                break;
-            }
-        } else if !in_run(c2, kind) {
+        if !in_run(c2, run) {
             break;
         }
         end += 1;

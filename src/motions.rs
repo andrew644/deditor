@@ -187,23 +187,8 @@ fn w_one(rope: &Rope, p: Pos, big: bool) -> Pos {
         }
         return Pos { line, col };
     }
-    let start_kind = if big {
-        !chars[col].is_whitespace()
-    } else {
-        char_is_word(chars[col])
-    };
-    while col < len {
-        let c = chars[col];
-        let same = if big {
-            !c.is_whitespace()
-        } else if start_kind {
-            char_is_word(c)
-        } else {
-            !c.is_whitespace() && !char_is_word(c)
-        };
-        if !same {
-            break;
-        }
+    let word_start = char_is_word(chars[col]);
+    while col < len && continues(chars[col], word_start, big) {
         col += 1;
     }
     if col >= len {
@@ -237,23 +222,8 @@ fn b_one(rope: &Rope, p: Pos, big: bool) -> Pos {
             col -= 1;
         }
         if col > 0 {
-            let start_kind = if big {
-                true
-            } else {
-                char_is_word(chars[col - 1])
-            };
-            while col > 0 {
-                let c = chars[col - 1];
-                let same = if big {
-                    !c.is_whitespace()
-                } else if start_kind {
-                    char_is_word(c)
-                } else {
-                    !c.is_whitespace() && !char_is_word(c)
-                };
-                if !same {
-                    break;
-                }
+            let word_start = char_is_word(chars[col - 1]);
+            while col > 0 && continues(chars[col - 1], word_start, big) {
                 col -= 1;
             }
             return Pos { line, col };
@@ -328,20 +298,9 @@ fn e_one(rope: &Rope, p: Pos, big: bool) -> Pos {
             col = 0;
             continue;
         }
-        let start_kind = if big { true } else { char_is_word(chars[col]) };
+        let word_start = char_is_word(chars[col]);
         let mut end = col;
-        while end < chars.len() {
-            let c = chars[end];
-            let same = if big {
-                !c.is_whitespace()
-            } else if start_kind {
-                char_is_word(c)
-            } else {
-                !c.is_whitespace() && !char_is_word(c)
-            };
-            if !same {
-                break;
-            }
+        while end < chars.len() && continues(chars[end], word_start, big) {
             end += 1;
         }
         return Pos { line, col: end - 1 };
@@ -377,13 +336,23 @@ fn ge_one(rope: &Rope, p: Pos, big: bool) -> Pos {
     }
 }
 
+/// Does `c` continue a run that began on a word character (`word_start`)? A
+/// WORD (`big`) run only ends at whitespace.
+fn continues(c: char, word_start: bool, big: bool) -> bool {
+    if big {
+        !c.is_whitespace()
+    } else if word_start {
+        char_is_word(c)
+    } else {
+        !c.is_whitespace() && !char_is_word(c)
+    }
+}
+
 fn same_class(a: char, b: char, big: bool) -> bool {
     if big {
         !a.is_whitespace() && !b.is_whitespace()
-    } else if char_is_word(a) {
-        char_is_word(b)
     } else {
-        !b.is_whitespace() && !char_is_word(b)
+        continues(b, char_is_word(a), false)
     }
 }
 
