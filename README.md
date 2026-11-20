@@ -176,8 +176,13 @@ Opened by `Ctrl-p` (files), `Ctrl-b` (buffers) or `:settings`.
 | `Enter` | accept (open file/buffer, or change setting) |
 | `Esc` `Ctrl-c` `Ctrl-]` | close |
 
-In the file panel, typing `dir/` browses into that directory; `~/` starts at
-the home directory.
+The file panel searches sub-directories recursively: entries are paths relative
+to the search root, shallowest first, capped at 20 000 entries, and long paths
+are elided from the left so the file name stays visible. The text after the last
+`/` fuzzy-matches those paths, so `clent` finds `src/lsp/client.rs`. Typing
+`dir/` makes that directory the search root (accepting a `dir/` entry does the
+same), `../` moves the root up, `~/` starts at the home directory, and `/path/`
+makes an absolute path the root.
 
 ## Global
 

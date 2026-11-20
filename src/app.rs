@@ -67,6 +67,7 @@ pub struct Editor {
     pub panel_items: Vec<String>,
     pub panel_order: Vec<usize>,
     pub panel_cursor: usize,
+    pub panel_root: String,
     pub completions: Option<Completions>,
     pub lsp: crate::lsp::LspManager,
     pub context_menu: Option<String>,
@@ -168,6 +169,7 @@ impl Editor {
             panel_items: Vec::new(),
             panel_order: Vec::new(),
             panel_cursor: 0,
+            panel_root: String::new(),
             completions: None,
             lsp: crate::lsp::LspManager::new(),
             context_menu: None,
@@ -1531,8 +1533,9 @@ impl Editor {
         self.panel = kind;
         self.panel_query.clear();
         self.panel_cursor = 0;
+        self.panel_root = String::new();
         self.panel_items = match kind {
-            crate::fuzzy::Panel::Files => crate::fuzzy::list_dir(&files_root("")),
+            crate::fuzzy::Panel::Files => crate::fuzzy::list_tree(&files_root("")),
             crate::fuzzy::Panel::Buffers => self
                 .buffers
                 .iter()
@@ -1551,6 +1554,7 @@ impl Editor {
         self.panel = crate::fuzzy::Panel::None;
         self.panel_query.clear();
         self.panel_items.clear();
+        self.panel_root.clear();
         self.panel_order.clear();
         self.panel_cursor = 0;
     }
@@ -1572,7 +1576,11 @@ impl Editor {
 
     fn rescan_files_panel(&mut self) {
         let (dir, _) = crate::fuzzy::split_path_query(&self.panel_query);
-        self.panel_items = crate::fuzzy::list_dir(&files_root(dir));
+        if dir == self.panel_root {
+            return;
+        }
+        self.panel_root = dir.to_string();
+        self.panel_items = crate::fuzzy::list_tree(&files_root(dir));
     }
 
     pub fn panel_type(&mut self, c: char) {
@@ -2238,11 +2246,16 @@ mod tests {
         ed.open_panel(crate::fuzzy::Panel::Files);
         assert_eq!(
             ed.panel_items,
-            vec!["other.txt".to_string(), "sub/".to_string()]
+            vec![
+                "other.txt".to_string(),
+                "sub/".to_string(),
+                "sub/target.txt".to_string()
+            ]
         );
         for c in "sub/".chars() {
             ed.panel_type(c);
         }
+        assert_eq!(ed.panel_root, "sub/");
         assert_eq!(ed.panel_items, vec!["target.txt".to_string()]);
         for c in "trgt".chars() {
             ed.panel_type(c);
@@ -2252,6 +2265,97 @@ mod tests {
         assert_eq!(ed.buf().display_name(), "target.txt");
         assert_eq!(text(&ed), "hit\n");
         assert_eq!(ed.panel, crate::fuzzy::Panel::None);
+        std::env::set_current_dir(&saved).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn files_panel_finds_nested_files_without_browsing() {
+        let _cwd = CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let dir = std::env::temp_dir().join(format!("deditor_panel_rec_{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(dir.join("src/lsp")).unwrap();
+        std::fs::write(dir.join("README.md"), "x\n").unwrap();
+        std::fs::write(dir.join("src/lsp/client.rs"), "nested\n").unwrap();
+        let saved = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+        let mut ed = Editor::test_new();
+        ed.open_panel(crate::fuzzy::Panel::Files);
+        assert!(ed.panel_items.contains(&"src/lsp/client.rs".to_string()));
+        for c in "clent".chars() {
+            ed.panel_type(c);
+        }
+        assert_eq!(ed.panel_items.len(), 4);
+        assert_eq!(ed.panel_order.len(), 1);
+        assert_eq!(ed.panel_items[ed.panel_order[0]], "src/lsp/client.rs");
+        ed.panel_accept();
+        assert_eq!(ed.buf().display_name(), "client.rs");
+        assert_eq!(text(&ed), "nested\n");
+        assert_eq!(ed.panel, crate::fuzzy::Panel::None);
+        std::env::set_current_dir(&saved).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn selecting_a_directory_narrows_the_panel_to_that_subtree() {
+        let _cwd = CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let dir = std::env::temp_dir().join(format!("deditor_panel_sub_{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(dir.join("src/lsp")).unwrap();
+        std::fs::write(dir.join("README.md"), "x\n").unwrap();
+        std::fs::write(dir.join("src/main.rs"), "y\n").unwrap();
+        std::fs::write(dir.join("src/lsp/client.rs"), "z\n").unwrap();
+        let saved = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+        let mut ed = Editor::test_new();
+        ed.open_panel(crate::fuzzy::Panel::Files);
+        for c in "src/".chars() {
+            ed.panel_type(c);
+        }
+        assert_eq!(ed.panel_root, "src/");
+        assert_eq!(
+            ed.panel_items,
+            vec![
+                "lsp/".to_string(),
+                "lsp/client.rs".to_string(),
+                "main.rs".to_string()
+            ]
+        );
+        ed.panel_accept();
+        assert_eq!(ed.panel_query, "src/lsp/");
+        assert_eq!(ed.panel_items, vec!["client.rs".to_string()]);
+        std::env::set_current_dir(&saved).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn typing_a_parent_path_moves_the_panel_search_root() {
+        let _cwd = CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let dir = std::env::temp_dir().join(format!("deditor_panel_up_{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(dir.join("here")).unwrap();
+        std::fs::create_dir_all(dir.join("there")).unwrap();
+        std::fs::write(dir.join("here/a.txt"), "a\n").unwrap();
+        std::fs::write(dir.join("there/b.txt"), "b\n").unwrap();
+        let saved = std::env::current_dir().unwrap();
+        std::env::set_current_dir(dir.join("here")).unwrap();
+        let mut ed = Editor::test_new();
+        ed.open_panel(crate::fuzzy::Panel::Files);
+        assert_eq!(ed.panel_items, vec!["a.txt".to_string()]);
+        for c in "../there/".chars() {
+            ed.panel_type(c);
+        }
+        assert_eq!(ed.panel_root, "../there/");
+        assert_eq!(ed.panel_items, vec!["b.txt".to_string()]);
+        ed.panel_accept();
+        assert_eq!(ed.buf().display_name(), "b.txt");
+        assert!(!ed.status_err);
         std::env::set_current_dir(&saved).unwrap();
         std::fs::remove_dir_all(&dir).ok();
     }

@@ -63,6 +63,45 @@ pub fn list_dir(dir: &Path) -> Vec<String> {
     out
 }
 
+pub const MAX_TREE_ENTRIES: usize = 20_000;
+
+pub fn list_tree(dir: &Path) -> Vec<String> {
+    list_tree_limited(dir, MAX_TREE_ENTRIES)
+}
+
+fn list_tree_limited(dir: &Path, max: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut queue = std::collections::VecDeque::from([String::new()]);
+    while let Some(prefix) = queue.pop_front() {
+        let Ok(entries) = std::fs::read_dir(dir.join(&prefix)) else {
+            continue;
+        };
+        let mut names: Vec<(String, bool)> = entries
+            .flatten()
+            .filter_map(|e| {
+                let name = e.file_name().to_string_lossy().to_string();
+                (!name.starts_with('.')).then(|| (name, e.file_type().is_ok_and(|t| t.is_dir())))
+            })
+            .collect();
+        names.sort();
+        for (name, is_dir) in names {
+            let rel = format!("{prefix}{name}");
+            if is_dir {
+                out.push(format!("{rel}/"));
+                queue.push_back(format!("{rel}/"));
+            } else {
+                out.push(rel);
+            }
+            if out.len() >= max {
+                out.sort();
+                return out;
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -117,5 +156,23 @@ mod tests {
         let mut got = fuzzy_filter(&items, "x.txt");
         got.sort();
         assert_eq!(got, vec![0, 1]);
+    }
+
+    #[test]
+    fn list_tree_walks_subdirectories_shallow_first() {
+        let dir = std::env::temp_dir().join(format!("deditor_tree_{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(dir.join("sub/deep")).unwrap();
+        std::fs::write(dir.join("a.txt"), "x").unwrap();
+        std::fs::write(dir.join("sub/b.txt"), "x").unwrap();
+        std::fs::write(dir.join("sub/deep/c.txt"), "x").unwrap();
+        std::fs::write(dir.join(".hidden"), "x").unwrap();
+        assert_eq!(
+            list_tree(&dir),
+            items(&["a.txt", "sub/", "sub/b.txt", "sub/deep/", "sub/deep/c.txt"])
+        );
+        assert_eq!(list_tree_limited(&dir, 2), items(&["a.txt", "sub/"]));
+        assert!(list_tree(&dir.join("missing")).is_empty());
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

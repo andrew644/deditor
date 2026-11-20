@@ -695,7 +695,7 @@ pub fn draw_content(
                 &format!(
                     "{}{}",
                     if row == sel_row { "> " } else { "  " },
-                    ed.panel_items[idx]
+                    elide_path(&ed.panel_items[idx], box_cols - 2)
                 ),
                 box_cols,
             ));
@@ -1017,6 +1017,17 @@ fn sel_row_span(sa: Pos, sb: Pos, lw: bool, line: usize) -> Option<(Option<usize
     }
 }
 
+fn elide_path(s: &str, cols: usize) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() <= cols {
+        return s.to_string();
+    }
+    let keep = cols.saturating_sub(1);
+    let mut out = String::from("…");
+    out.extend(chars.iter().skip(chars.len() - keep));
+    out
+}
+
 fn pad_line(s: &str, cols: usize) -> String {
     let trimmed: String = s.chars().take(cols).collect();
     format!("{trimmed:<cols$}")
@@ -1025,6 +1036,13 @@ fn pad_line(s: &str, cols: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn elide_path_keeps_the_file_name_visible() {
+        assert_eq!(elide_path("src/mod.rs", 20), "src/mod.rs");
+        assert_eq!(elide_path("src/lsp/client.rs", 10), "…client.rs");
+        assert_eq!(elide_path("deep/nested/path/file.txt", 1), "…");
+    }
 
     #[test]
     fn completion_box_sits_beside_the_command_line_without_covering_it() {
