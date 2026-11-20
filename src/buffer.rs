@@ -220,17 +220,22 @@ impl Buffer {
     }
 
     pub fn offset_of(&self, p: Pos) -> usize {
-        self.rope.line_to_char(p.line) + p.col
+        self.rope
+            .try_line_to_char(p.line)
+            .unwrap_or(self.rope.len_chars())
+            .saturating_add(p.col)
+            .min(self.rope.len_chars())
     }
     pub fn mode_at_eol(&self, c: Pos) -> bool {
         c.col >= line_chars(&self.rope, c.line).saturating_sub(1)
     }
 
     pub fn pos_of(&self, offset: usize) -> Pos {
-        let line = self.rope.char_to_line(offset.min(self.rope.len_chars()));
+        let offset = offset.min(self.rope.len_chars());
+        let line = self.rope.char_to_line(offset);
         Pos {
             line,
-            col: offset - self.rope.line_to_char(line),
+            col: (offset - self.rope.line_to_char(line)).min(line_chars(&self.rope, line)),
         }
     }
 
@@ -438,6 +443,19 @@ fn replace_prefix_shifts(edits: &[(usize, String, String)]) -> Vec<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn positions_outside_the_text_map_to_its_ends() {
+        let mut b = Buffer::empty();
+        b.insert_text("one\ntwo", false);
+        assert_eq!(b.offset_of(Pos { line: 9, col: 0 }), 7);
+        assert_eq!(b.offset_of(Pos { line: 1, col: 40 }), 7);
+        assert_eq!(b.pos_of(99), Pos { line: 1, col: 3 });
+        assert_eq!(
+            b.pos_of(b.offset_of(Pos { line: 1, col: 1 })),
+            Pos { line: 1, col: 1 }
+        );
+    }
 
     #[test]
     fn undo_back_to_saved_content_clears_dirty() {

@@ -429,7 +429,7 @@ impl App {
         };
         let b = ed.buf();
         let wrap = ed.wrap_with(ed.win().view_cols.max(1));
-        let line = buffer::line_text(&b.rope, b.cursor.line);
+        let line = buffer::line_text(&b.rope, b.cursor.line.min(b.rope.len_lines() - 1));
         let row = wrap
             .screen_row(&b.rope, b.view_top, b.view_sub, b.cursor)
             .unwrap_or(0);
@@ -527,6 +527,7 @@ impl App {
         let mut encoder = gpu
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        ed.clamp_cursors();
         ed.refresh_spell_spans();
         ed.refresh_marks();
         if let Err(e) = render::draw_content(gpu, text, rects, ed, &view, &mut encoder) {

@@ -261,7 +261,9 @@ impl Editor {
         let id = self.windows.len();
         let mut w = Window::new(self.win().tabs.clone());
         w.cur = self.win().cur;
-        self.tree.split_leaf(self.active_win, axis, id);
+        if !self.tree.split_leaf(self.active_win, axis, id) {
+            return;
+        }
         self.windows.push(w);
         self.active_win = id;
         self.set_status(
@@ -406,7 +408,16 @@ impl Editor {
         crate::wrap::Wrap::new(cols, self.config.tab_width as usize)
     }
 
+    /// Paint reads every window's cursor position directly, so each buffer is
+    /// pulled back inside its text before a frame is drawn.
+    pub fn clamp_cursors(&mut self) {
+        for b in &mut self.buffers {
+            b.clamp();
+        }
+    }
+
     pub fn scroll_to_cursor(&mut self, rows: usize) {
+        self.buf_mut().clamp();
         let last = self.buf().rope.len_lines().saturating_sub(1);
         if self.buf().view_top > last {
             let b = self.buf_mut();
@@ -2260,6 +2271,17 @@ mod tests {
         assert_eq!(goto_pos(&rope, 9, 0), Pos { line: 1, col: 0 });
         assert_eq!(goto_pos(&rope, 0, 7), Pos { line: 0, col: 3 });
         assert_eq!(goto_pos(&rope, 1, 2), Pos { line: 1, col: 2 });
+    }
+
+    #[test]
+    fn every_buffer_is_clamped_before_a_frame_is_painted() {
+        let mut ed = ed_with("one\ntwo");
+        ed.buffers.push(Buffer::empty());
+        ed.buffers[0].cursor = Pos { line: 40, col: 9 };
+        ed.buffers[1].cursor = Pos { line: 3, col: 2 };
+        ed.clamp_cursors();
+        assert_eq!(ed.buffers[0].cursor, Pos { line: 1, col: 3 });
+        assert_eq!(ed.buffers[1].cursor, Pos { line: 0, col: 0 });
     }
 
     fn ed_with(s: &str) -> Editor {
