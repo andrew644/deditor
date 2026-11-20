@@ -321,6 +321,23 @@ fn popup_rects(
     }
 }
 
+/// The fuzzy panel's box: the query line plus `shown` item rows, half the
+/// focused pane wide (never wider than the pane), starting under that pane's
+/// tab row. Its text is drawn at the box origin, so background and text cannot
+/// drift apart when a split moves the pane.
+fn panel_box(f: &WinRect, shown: usize, cw: f32, ch: f32) -> (usize, (f32, f32, f32, f32)) {
+    let box_cols = (f.cols as f32 * 0.5).max(40.0).min(f.cols as f32) as usize;
+    (
+        box_cols,
+        (
+            f.x as f32 * cw,
+            (f.y + 1) as f32 * ch,
+            box_cols as f32 * cw,
+            (1 + shown) as f32 * ch,
+        ),
+    )
+}
+
 pub struct TabHit {
     pub x0: f32,
     pub x1: f32,
@@ -779,7 +796,6 @@ pub fn draw_content(
     let f = l.focus(ed).unwrap_or(&fallback);
     let ox = f.x as f32 * cw;
     let oy = f.y as f32 * ch;
-    let wy = oy + ch;
     let wc = f.cols as f32 * cw;
     let wh = f.height as f32 * ch;
     let gutter = f.gutter as usize;
@@ -954,6 +970,7 @@ pub fn draw_content(
     }
 
     let mut popup_s = String::new();
+    let mut popup_origin = None;
     let popup_open = ed.panel != crate::fuzzy::Panel::None;
     if popup_open {
         let max_rows = 15usize;
@@ -967,8 +984,8 @@ pub fn draw_content(
             .panel_cursor
             .saturating_sub(start)
             .min(shown.saturating_sub(1));
-        let box_cols = (f.cols as f32 * 0.5).max(40.0).min(f.cols as f32) as usize;
-        let pw = box_cols as f32 * cw;
+        let (box_cols, pbox) = panel_box(f, shown, cw, ch);
+        popup_origin = Some((pbox.0, pbox.1));
         popup_s.push_str(&pad_line(&ed.panel_query, box_cols));
         for (row, &idx) in ed.panel_order.iter().skip(start).take(max_rows).enumerate() {
             popup_s.push('\n');
@@ -984,7 +1001,7 @@ pub fn draw_content(
         popup_rects(
             &mut overlay,
             theme,
-            (ox, wy, pw, (1 + shown) as f32 * ch),
+            pbox,
             (!ed.panel_order.is_empty()).then_some(1 + sel_row),
             ch,
         );
@@ -1073,8 +1090,8 @@ pub fn draw_content(
     areas.push((&mut tb_msg, 0.0, h - ch, left_color));
     areas.push((&mut tb_ruler, right_x as f32 * cw, h - ch, theme.fg));
     let mut oareas: Vec<(&mut Buffer, f32, f32, u32)> = Vec::new();
-    if popup_open {
-        oareas.push((&mut tb_popup, cw, ch, theme.popup_fg));
+    if let Some((px, py)) = popup_origin {
+        oareas.push((&mut tb_popup, px, py, theme.popup_fg));
     }
     if let Some((px, py)) = cpl_pos {
         oareas.push((&mut tb_cpl, px, py, theme.popup_fg));
@@ -1428,6 +1445,44 @@ mod tests {
         assert_eq!(place_popup(50.0, 10.0, 0.0, 100.0), 50.0);
         assert_eq!(place_popup(95.0, 10.0, 0.0, 100.0), 90.0);
         assert_eq!(place_popup(5.0, 140.0, 0.0, 100.0), 0.0);
+    }
+
+    #[test]
+    fn panel_box_follows_the_focused_pane() {
+        let right = WinRect {
+            win: 1,
+            x: 100,
+            y: 12,
+            cols: 60,
+            height: 20,
+            gutter: 4,
+            num_cols: 4,
+            sign_cols: 0,
+            blame_cols: 0,
+        };
+        let (box_cols, (x, y, w, h)) = panel_box(&right, 3, 8.0, 16.0);
+        assert_eq!(box_cols, 40);
+        assert_eq!((x, y), (800.0, 208.0));
+        assert_eq!((w, h), (320.0, 64.0));
+        assert!(x + w <= (right.x + right.cols) as f32 * 8.0);
+    }
+
+    #[test]
+    fn panel_box_never_outgrows_its_pane() {
+        let narrow = WinRect {
+            win: 0,
+            x: 0,
+            y: 0,
+            cols: 24,
+            height: 10,
+            gutter: 0,
+            num_cols: 0,
+            sign_cols: 0,
+            blame_cols: 0,
+        };
+        let (box_cols, (_, _, w, h)) = panel_box(&narrow, 0, 10.0, 20.0);
+        assert_eq!(box_cols, 24);
+        assert_eq!((w, h), (240.0, 20.0));
     }
 
     #[test]
