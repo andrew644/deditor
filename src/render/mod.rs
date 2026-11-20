@@ -202,6 +202,9 @@ pub struct WinRect {
     pub cols: u32,
     pub height: u32,
     pub gutter: u32,
+    pub num_cols: u32,
+    pub sign_cols: u32,
+    pub blame_cols: u32,
 }
 
 impl WinRect {
@@ -225,25 +228,45 @@ pub fn tab_label(i: usize, b: &crate::buffer::Buffer) -> String {
     )
 }
 
-pub fn gutter_for(b: &crate::buffer::Buffer, line_numbers: bool, signs: bool) -> u32 {
+/// Width of the number field and of the sign field, in that order of priority
+/// when the pane is too narrow to show both.
+pub fn gutter_parts(b: &crate::buffer::Buffer, line_numbers: bool, signs: bool) -> (u32, u32) {
     let numbers = if line_numbers {
         (b.rope.len_lines().max(1).to_string().len() as u32) + 2
     } else {
         0
     };
-    numbers + if signs { 2 } else { 0 }
+    (numbers, if signs { 2 } else { 0 })
 }
 
 /// Width of the `date author` column that `F4` puts left of the line numbers.
 pub const BLAME_W: usize = 22;
 
 fn blame_text(e: Option<&crate::git::BlameLine>, w: usize) -> String {
+    let Some(name) = w.checked_sub(12) else {
+        return " ".repeat(w);
+    };
     let Some(e) = e.filter(|e| !e.who.is_empty()) else {
         return " ".repeat(w);
     };
-    let name = w.saturating_sub(12);
     let who: String = e.who.chars().take(name).collect();
     format!("{:>10} {:<name$} ", e.when, who, name = name)
+}
+
+/// Widths of the gutter fields in a pane `cols` columns wide, leaving the body
+/// at least one column: line numbers win, then signs, then blame.
+fn fit_gutter(cols: u32, num: u32, sign: u32, blame: u32) -> (u32, u32, u32) {
+    let room = cols.saturating_sub(1);
+    let num = num.min(room);
+    let left = room - num;
+    let sign = if sign <= left { sign } else { 0 };
+    (num, sign, if blame <= left - sign { blame } else { 0 })
+}
+
+/// Origin of a box `size` wide that wants to start at `want`, kept inside the
+/// span from `origin` to `origin + span`.
+fn place_popup(want: f32, size: f32, origin: f32, span: f32) -> f32 {
+    want.min(origin + span - size).max(origin)
 }
 
 pub struct TabHit {
@@ -262,7 +285,11 @@ pub fn tab_hit_ranges(ed: &crate::app::Editor, l: &Layout, cw: f32, ch: f32) -> 
             continue;
         };
         let mut x = wr.x as f32 * cw;
+        let right = (wr.x + wr.cols) as f32 * cw;
         for (tab, &bi) in win.tabs.iter().enumerate() {
+            if x >= right {
+                break;
+            }
             let wid = tab_label(tab, &ed.buffers[bi]).chars().count() as f32 * cw;
             out.push(TabHit {
                 x0: x,
@@ -298,19 +325,23 @@ impl Layout {
             .into_iter()
             .filter_map(|(win, r)| {
                 let w = ed.windows.get(win)?;
-                let gutter = u32::try_from(usize::from(ed.show_blame) * BLAME_W).unwrap()
-                    + gutter_for(
-                        &ed.buffers[w.cur_buf()],
-                        ed.config.line_numbers,
-                        ed.has_signs(w.cur_buf()),
-                    );
+                let (num, sign) = gutter_parts(
+                    &ed.buffers[w.cur_buf()],
+                    ed.config.line_numbers,
+                    ed.has_signs(w.cur_buf()),
+                );
+                let blame = if ed.show_blame { BLAME_W as u32 } else { 0 };
+                let (num, sign, blame) = fit_gutter(r.cols, num, sign, blame);
                 Some(WinRect {
                     win,
                     x: r.x,
                     y: r.y,
                     cols: r.cols,
                     height: r.rows,
-                    gutter,
+                    gutter: num + sign + blame,
+                    num_cols: num,
+                    sign_cols: sign,
+                    blame_cols: blame,
                 })
             })
             .collect();
@@ -389,6 +420,9 @@ pub fn draw_content(
         for (i, &bi) in win.tabs.iter().enumerate() {
             let label = tab_label(i, &ed.buffers[bi]);
             let start = ox + tab_text.chars().count() as f32 * cw;
+            if start >= ox + wc {
+                break;
+            }
             tab_text.push_str(&label);
             rects.push(rects::RectInstance {
                 x: start,
@@ -564,9 +598,9 @@ pub fn draw_content(
         let mut gutter_s = String::new();
         let mut body_s = String::new();
         let mut sign_s = [String::new(), String::new(), String::new()];
-        let blame_w = usize::from(ed.show_blame) * BLAME_W;
-        let sign_w = 2 * usize::from(ed.has_signs(win.cur_buf()));
-        let num_w = gutter.saturating_sub(sign_w).saturating_sub(blame_w).max(1);
+        let blame_w = wr.blame_cols as usize;
+        let sign_w = wr.sign_cols as usize;
+        let num_w = wr.num_cols as usize;
         for (r, row) in rows.iter().enumerate() {
             if row.line < buf.rope.len_lines() {
                 if wr.gutter > 0 {
@@ -603,7 +637,14 @@ pub fn draw_content(
                 }
             }
         }
+        let (first_line, last_line) = match (rows.first(), rows.last()) {
+            (Some(a), Some(b)) => (a.line, b.line),
+            _ => (0, 0),
+        };
         for d in ed.lsp.diags_for(buf.path.as_ref()) {
+            if d.line < first_line || d.line > last_line {
+                continue;
+            }
             let Some(row) = wrap.screen_row(
                 &buf.rope,
                 buf.view_top,
@@ -696,6 +737,9 @@ pub fn draw_content(
         cols: l.cols,
         height: l.rows.saturating_add(1),
         gutter: 0,
+        num_cols: 0,
+        sign_cols: 0,
+        blame_cols: 0,
     };
     let f = l.focus(ed).unwrap_or(&fallback);
     let ox = f.x as f32 * cw;
@@ -764,7 +808,7 @@ pub fn draw_content(
     };
     let left_s = fit(&left_s, room);
     let right_s = format!("{ruler}  {mode_label}");
-    let left_color = if ed.cmd_kind.is_none() && !msg.is_empty() {
+    let left_color = if ed.cmd_kind.is_none() && ed.status_err && !msg.is_empty() {
         theme.error
     } else {
         theme.fg
@@ -788,8 +832,8 @@ pub fn draw_content(
         let nrows = hover_s.lines().count() as f32;
         let row = 1.0 + cursor_row.unwrap_or(0) as f32;
         let hw = hover_cols as f32 * cw;
-        let hx = (ox + gutter as f32 * cw + 10.0 * cw).min(ox + wc - hw);
-        let hy = (oy + row * ch + ch).min(oy + wh - (nrows + 1.0) * ch);
+        let hx = place_popup(ox + gutter as f32 * cw + 10.0 * cw, hw, ox, wc);
+        let hy = place_popup(oy + row * ch + ch, (nrows + 1.0) * ch, oy + ch, wh - ch);
         hover_pos = Some((hx, hy));
         overlay.push(rects::RectInstance {
             x: hx,
@@ -813,9 +857,13 @@ pub fn draw_content(
             .unwrap_or(1);
         let mrows = menu_lines.len() as f32;
         let mw = mcols as f32 * cw;
-        let mx = cur_x.min(ox + wc - mw);
-        let my =
-            (oy + (cursor_row.unwrap_or(0) as f32 + 2.0) * ch).min(oy + wh - (mrows + 1.0) * ch);
+        let mx = place_popup(cur_x, mw, ox, wc);
+        let my = place_popup(
+            oy + (cursor_row.unwrap_or(0) as f32 + 2.0) * ch,
+            (mrows + 1.0) * ch,
+            oy + ch,
+            wh - ch,
+        );
         menu_pos = Some((mx, my));
         overlay.push(rects::RectInstance {
             x: mx,
@@ -863,8 +911,8 @@ pub fn draw_content(
                 )
                 .unwrap_or(0) as f32;
         let cwid = 42.0f32 * cw;
-        let cx = (ox + (gutter as f32 + cs.col as f32) * cw).min(ox + wc - cwid);
-        let cy = (oy + (row + 1.0) * ch).min(oy + wh - nrows * ch);
+        let cx = place_popup(ox + (gutter as f32 + cs.col as f32) * cw, cwid, ox, wc);
+        let cy = place_popup(oy + (row + 1.0) * ch, nrows * ch, oy + ch, wh - ch);
         comp_pos = Some((cx, cy, nrows));
         overlay.push(rects::RectInstance {
             x: cx,
@@ -1287,10 +1335,65 @@ mod tests {
     fn sign_column_widens_the_gutter_only_when_used() {
         let mut b = crate::buffer::Buffer::empty();
         b.insert_text("one\ntwo\nthree\n", false);
-        assert_eq!(gutter_for(&b, true, false), 3);
-        assert_eq!(gutter_for(&b, true, true), 5);
-        assert_eq!(gutter_for(&b, false, false), 0);
-        assert_eq!(gutter_for(&b, false, true), 2);
+        assert_eq!(gutter_parts(&b, true, false), (3, 0));
+        assert_eq!(gutter_parts(&b, true, true), (3, 2));
+        assert_eq!(gutter_parts(&b, false, false), (0, 0));
+        assert_eq!(gutter_parts(&b, false, true), (0, 2));
+    }
+
+    #[test]
+    fn blame_text_never_overflows_its_column() {
+        let e = crate::git::BlameLine {
+            when: "2026-11-20".into(),
+            who: "andrew".into(),
+        };
+        for w in [0, 5, 11, 12, 21, BLAME_W] {
+            assert_eq!(blame_text(Some(&e), w).chars().count(), w, "width {w}");
+        }
+        assert_eq!(blame_text(Some(&e), 12).trim_end(), "2026-11-20");
+        assert_eq!(blame_text(None, BLAME_W), " ".repeat(BLAME_W));
+    }
+
+    #[test]
+    fn a_narrow_pane_keeps_room_for_the_body() {
+        assert_eq!(fit_gutter(80, 6, 2, 22), (6, 2, 22));
+        assert_eq!(fit_gutter(8, 6, 2, 22), (6, 0, 0));
+        assert_eq!(fit_gutter(1, 6, 2, 22), (0, 0, 0));
+        assert_eq!(fit_gutter(20, 6, 2, 22), (6, 2, 0));
+    }
+
+    #[test]
+    fn popups_stay_inside_their_window() {
+        assert_eq!(place_popup(50.0, 10.0, 0.0, 100.0), 50.0);
+        assert_eq!(place_popup(95.0, 10.0, 0.0, 100.0), 90.0);
+        assert_eq!(place_popup(5.0, 140.0, 0.0, 100.0), 0.0);
+    }
+
+    #[test]
+    fn tab_hits_stop_at_the_window_edge() {
+        let mut ed = crate::app::Editor::test_new();
+        for _ in 1..4 {
+            ed.buffers.push(crate::buffer::Buffer::empty());
+        }
+        ed.windows[0].tabs = vec![0, 1, 2, 3];
+        let layout = Layout {
+            cols: 80,
+            rows: 24,
+            wins: vec![WinRect {
+                win: 0,
+                x: 0,
+                y: 0,
+                cols: 20,
+                height: 24,
+                gutter: 0,
+                num_cols: 0,
+                sign_cols: 0,
+                blame_cols: 0,
+            }],
+        };
+        let hits = tab_hit_ranges(&ed, &layout, 10.0, 20.0);
+        assert!(hits.len() < 4, "tabs past the edge still claim clicks");
+        assert!(hits.iter().all(|h| h.x0 < 200.0));
     }
 
     #[test]
@@ -1308,6 +1411,9 @@ mod tests {
                     cols: 40,
                     height: 24,
                     gutter: 2,
+                    num_cols: 2,
+                    sign_cols: 0,
+                    blame_cols: 0,
                 },
                 WinRect {
                     win: 1,
@@ -1316,6 +1422,9 @@ mod tests {
                     cols: 40,
                     height: 24,
                     gutter: 2,
+                    num_cols: 2,
+                    sign_cols: 0,
+                    blame_cols: 0,
                 },
             ],
         };
