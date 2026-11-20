@@ -153,8 +153,10 @@ impl LspManager {
         if self.failed.contains(&cmd) {
             return;
         }
-        if self.server != Some(cmd) {
+        let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        if self.server != Some(cmd) || self.root != root {
             self.reset();
+            self.root = root;
             match LspClient::spawn(cmd, &[], &self.root.display().to_string()) {
                 Ok(mut c) => {
                     c.request(
@@ -254,10 +256,11 @@ impl LspManager {
         }))
     }
 
-    pub fn hover_at(&mut self, path: &Path, p: Pos, line: &str) {
+    pub fn hover_at(&mut self, path: &Path, p: Pos, line: &str, text: &str) {
         if self.phase != Phase::Ready {
             return;
         }
+        self.sync_full(path, text);
         let Some(params) = Self::doc_json(path, p, line) else {
             return;
         };
@@ -270,10 +273,11 @@ impl LspManager {
         }
     }
 
-    pub fn goto_definition(&mut self, path: &Path, p: Pos, line: &str) {
+    pub fn goto_definition(&mut self, path: &Path, p: Pos, line: &str, text: &str) {
         if self.phase != Phase::Ready {
             return;
         }
+        self.sync_full(path, text);
         let Some(params) = Self::doc_json(path, p, line) else {
             return;
         };
@@ -794,6 +798,43 @@ mod tests {
             u.to_file_path().unwrap(),
             PathBuf::from("/tmp/proj/main.rs")
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hover_shares_the_edited_text_first() {
+        let mut m = LspManager::new();
+        m.client = Some(LspClient::spawn("cat", &[], "/tmp").unwrap());
+        m.phase = Phase::Ready;
+        let path = PathBuf::from("/tmp/deditor_hover.rs");
+        m.open.insert(path.clone(), 3);
+        m.hover_at(&path, Pos { line: 0, col: 0 }, "old", "fn edited() {}");
+        let rx = &m.client.as_ref().unwrap().rx;
+        match rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap() {
+            RpcMsg::Notification { method, params } => {
+                assert_eq!(method, "textDocument/didChange");
+                assert_eq!(params["contentChanges"][0]["text"], "fn edited() {}");
+                assert_eq!(params["textDocument"]["version"], 4);
+            }
+            _ => panic!("expected the sync notification, got other message"),
+        }
+        match rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap() {
+            RpcMsg::ServerRequest { method, .. } => assert_eq!(method, "textDocument/hover"),
+            _ => panic!("expected the hover request, got other message"),
+        }
+    }
+
+    #[test]
+    fn a_new_working_directory_retires_the_server() {
+        let mut m = LspManager::new();
+        m.server = Some("rust-analyzer");
+        m.phase = Phase::Ready;
+        m.root = PathBuf::from("/deditor-not-the-cwd");
+        m.open
+            .insert(PathBuf::from("/deditor-not-the-cwd/main.rs"), 1);
+        m.ensure(Some(&PathBuf::from("main.rs")));
+        assert_eq!(m.root, std::env::current_dir().unwrap());
+        assert!(m.open.is_empty(), "documents of the old server are retired");
     }
 
     #[cfg(unix)]

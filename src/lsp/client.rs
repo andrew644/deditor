@@ -112,7 +112,12 @@ impl LspClient {
                 }
                 let Some(n) = len else { continue };
                 if n > MAX_FRAME_BYTES {
-                    return;
+                    let skipped =
+                        std::io::copy(&mut (&mut reader).take(n as u64), &mut std::io::sink());
+                    if skipped.is_err() {
+                        return;
+                    }
+                    continue;
                 }
                 let mut buf = vec![0u8; n];
                 if reader.read_exact(&mut buf).is_err() {

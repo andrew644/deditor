@@ -1624,7 +1624,8 @@ impl Editor {
         if let Some(p) = self.buf().path.clone() {
             let c = self.buf().cursor;
             let line = crate::buffer::line_text(&self.buf().rope, c.line);
-            self.lsp.hover_at(&p, c, &line);
+            let text = self.buf().rope.to_string();
+            self.lsp.hover_at(&p, c, &line, &text);
         }
     }
 
@@ -1632,7 +1633,8 @@ impl Editor {
         if let Some(p) = self.buf().path.clone() {
             let c = self.buf().cursor;
             let line = crate::buffer::line_text(&self.buf().rope, c.line);
-            self.lsp.goto_definition(&p, c, &line);
+            let text = self.buf().rope.to_string();
+            self.lsp.goto_definition(&p, c, &line, &text);
         }
     }
 
