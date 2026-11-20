@@ -1564,17 +1564,24 @@ impl Editor {
         };
         let b = &self.buffers[w.cur_buf()];
         let wrap = self.wrap_with(w.view_cols);
-        let abs = wrap.row_of(
-            &b.rope,
-            Pos {
+        let rows = wrap.screen_rows(&b.rope, b.view_top, b.view_sub, drow + 1);
+        let Some(row) = rows.last() else {
+            return Pos {
                 line: b.view_top,
                 col: 0,
-            },
-        ) + b.view_sub
-            + drow;
-        let (line, sub) = wrap.anchor(&b.rope, abs);
-        let col = wrap.col_at(&b.rope, line, sub, xcell);
-        Pos { line, col }
+            };
+        };
+        let last = b.rope.len_lines().saturating_sub(1);
+        let line = row.line.min(last);
+        let sub = wrap
+            .rows(&crate::buffer::line_text(&b.rope, line))
+            .iter()
+            .position(|&(s, _)| s == row.start)
+            .unwrap_or(0);
+        Pos {
+            line,
+            col: wrap.col_at(&b.rope, line, sub, xcell),
+        }
     }
 
     pub fn context_menu_text(&self) -> String {
@@ -2664,6 +2671,13 @@ mod tests {
         assert_eq!(ed.pos_at_window(0, 0, 0), Pos { line: 0, col: 0 });
         assert_eq!(ed.pos_at_window(0, 3, 4), Pos { line: 3, col: 4 });
         assert_eq!(ed.pos_at_window(0, 1, 100), Pos { line: 1, col: 5 });
+        ed.buf_mut().view_top = 6;
+        assert_eq!(ed.pos_at_window(0, 1, 2), Pos { line: 7, col: 2 });
+        assert_eq!(
+            ed.pos_at_window(0, 60, 0),
+            Pos { line: 10, col: 0 },
+            "a click below the text clamps to the last line"
+        );
         let mut wide = Editor::test_new();
         wide.buf_mut().insert_text(&"x".repeat(200), false);
         assert_eq!(wide.pos_at_window(0, 2, 5), Pos { line: 0, col: 165 });
