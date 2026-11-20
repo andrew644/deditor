@@ -150,11 +150,11 @@ impl TextSystem {
     /// when every glyph advances by exactly one cell.
     /// Shape without a color so each `TextArea`'s `default_color` (the theme) wins:
     /// cosmic-text stamps `Attrs::color_opt` onto every glyph and glyphon prefers it.
-    pub fn attrs<'a>(&'a self) -> Attrs<'a> {
+    fn attrs<'a>(&'a self) -> Attrs<'a> {
         Attrs::new().family(grid_family(&self.font_system, &self.family_name))
     }
 
-    pub fn remeasure(&mut self) {
+    fn remeasure(&mut self) {
         let name = self.family_name.clone();
         let font = grid_family(&self.font_system, &name);
         let line_height = self.font_size_px * 1.35;
@@ -181,7 +181,7 @@ pub fn grid_family<'a>(fonts: &FontSystem, name: &'a str) -> Family<'a> {
     }
 }
 
-pub fn measure_cell(fonts: &mut FontSystem, family: Family<'_>, size: f32) -> f32 {
+fn measure_cell(fonts: &mut FontSystem, family: Family<'_>, size: f32) -> f32 {
     let line_height = size * 1.35;
     let attrs = Attrs::new().family(family);
     let mut buf = Buffer::new(fonts, Metrics::new(size, line_height));

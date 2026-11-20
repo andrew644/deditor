@@ -20,7 +20,7 @@ pub struct Group {
     pub removed: usize,
 }
 
-pub fn signs(groups: &[Group], lines: usize) -> Vec<Sign> {
+fn signs(groups: &[Group], lines: usize) -> Vec<Sign> {
     let mut out = vec![Sign::None; lines];
     for g in groups {
         let mark = match (g.added > 0, g.removed > 0) {
@@ -42,7 +42,7 @@ pub fn signs(groups: &[Group], lines: usize) -> Vec<Sign> {
 /// new text, so they wait in `pending` until the line that follows them shows
 /// up; a run of deletions directly followed by insertions is one modification.
 #[derive(Default)]
-pub struct Grouper {
+struct Grouper {
     groups: Vec<Group>,
     open: Option<Group>,
     pending: usize,
@@ -52,13 +52,13 @@ pub struct Grouper {
 impl Grouper {
     /// Start of a hunk. Deletions left over from the previous hunk belong
     /// where that hunk began, not here.
-    pub fn hunk(&mut self, first: usize) {
+    fn hunk(&mut self, first: usize) {
         self.flush();
         self.take_pending(self.anchor);
         self.anchor = first;
     }
 
-    pub fn add(&mut self, index: usize) {
+    fn add(&mut self, index: usize) {
         self.anchor = index;
         match self.open {
             Some(g) if g.removed == 0 && g.line + g.added == index && self.pending == 0 => {
@@ -79,19 +79,19 @@ impl Grouper {
         }
     }
 
-    pub fn del(&mut self) {
+    fn del(&mut self) {
         self.flush();
         self.pending += 1;
     }
 
     /// A context line: deletions before it are marked on it.
-    pub fn ctx(&mut self, index: usize) {
+    fn ctx(&mut self, index: usize) {
         self.flush();
         self.take_pending(index);
         self.anchor = index;
     }
 
-    pub fn finish(mut self, lines: usize) -> Vec<Group> {
+    fn finish(mut self, lines: usize) -> Vec<Group> {
         self.flush();
         self.take_pending(self.anchor.min(lines));
         self.groups

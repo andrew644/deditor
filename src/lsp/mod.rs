@@ -69,11 +69,11 @@ pub struct LspManager {
     phase: Phase,
     open: HashMap<PathBuf, i32>,
     pending_open: Vec<PathBuf>,
-    pub waiting: Wait,
-    pub waiting_id: Option<u64>,
+    waiting: Wait,
+    waiting_id: Option<u64>,
     waiting_since: Option<std::time::Instant>,
     pub hover: Option<String>,
-    pub diags: HashMap<PathBuf, Vec<Diag>>,
+    diags: HashMap<PathBuf, Vec<Diag>>,
     pub completion: Option<CompletionState>,
     completion_seq: u64,
     last_rx: Option<std::time::Instant>,
@@ -521,7 +521,7 @@ fn marked_to_text(m: &lt::MarkedString) -> String {
     }
 }
 
-pub fn parse_location(result: Option<&serde_json::Value>) -> Option<(PathBuf, usize, usize)> {
+fn parse_location(result: Option<&serde_json::Value>) -> Option<(PathBuf, usize, usize)> {
     let v = result?;
     if v.is_null() {
         return None;
@@ -554,7 +554,7 @@ pub fn parse_location(result: Option<&serde_json::Value>) -> Option<(PathBuf, us
 }
 
 /// Identifier run immediately before (line, col) in `text`.
-pub fn ident_prefix(text: &str, line: usize, col: usize) -> String {
+fn ident_prefix(text: &str, line: usize, col: usize) -> String {
     let l = text.split('\n').nth(line).unwrap_or("");
     let chars: Vec<char> = l.chars().take(col).collect();
     let mut i = chars.len();
@@ -564,7 +564,7 @@ pub fn ident_prefix(text: &str, line: usize, col: usize) -> String {
     chars[i..].iter().collect()
 }
 
-pub fn parse_completions(result: Option<&serde_json::Value>) -> Vec<CompItem> {
+fn parse_completions(result: Option<&serde_json::Value>) -> Vec<CompItem> {
     let Some(v) = result else {
         return Vec::new();
     };
@@ -584,7 +584,7 @@ pub fn parse_completions(result: Option<&serde_json::Value>) -> Vec<CompItem> {
         .collect()
 }
 
-pub fn kind_char(k: Option<lt::CompletionItemKind>) -> char {
+fn kind_char(k: Option<lt::CompletionItemKind>) -> char {
     use lt::CompletionItemKind as K;
     match k {
         Some(K::FUNCTION) => 'f',

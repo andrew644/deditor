@@ -243,7 +243,7 @@ impl Editor {
         self.windows[self.active_win].view_cols
     }
 
-    pub fn win_ids(&self) -> Vec<usize> {
+    fn win_ids(&self) -> Vec<usize> {
         let mut out = Vec::new();
         self.tree.leaves(&mut out);
         out

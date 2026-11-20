@@ -14,7 +14,7 @@ fn is_token_char(c: char) -> bool {
     c.is_alphanumeric() || is_apostrophe(c)
 }
 
-pub fn normalize(word: &str) -> String {
+fn normalize(word: &str) -> String {
     word.replace('\u{2019}', "'").to_lowercase()
 }
 
@@ -59,7 +59,7 @@ impl Spell {
         self.spans.clear();
     }
 
-    pub fn known(&self, word: &str) -> bool {
+    fn known(&self, word: &str) -> bool {
         self.personal.contains(word) || BASE_WORDS.contains(word)
     }
 
