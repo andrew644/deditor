@@ -12,6 +12,19 @@ pub enum Panel {
     Settings,
 }
 
+/// A candidate string that remembers which entry it came from, so the ranked
+/// list can be turned back into indices without searching for each match.
+struct Match<'a> {
+    item: &'a str,
+    index: usize,
+}
+
+impl AsRef<str> for Match<'_> {
+    fn as_ref(&self) -> &str {
+        self.item
+    }
+}
+
 pub fn fuzzy_filter(items: &[String], query: &str) -> Vec<usize> {
     if query.trim().is_empty() {
         return (0..items.len()).collect();
@@ -23,20 +36,14 @@ pub fn fuzzy_filter(items: &[String], query: &str) -> Vec<usize> {
         Normalization::Smart,
         nucleo_matcher::pattern::AtomKind::Fuzzy,
     );
-    let scored = pattern.match_list(items.iter(), &mut matcher);
-    let mut used = vec![false; items.len()];
-    let mut out = Vec::with_capacity(scored.len());
-    for (item, _) in scored {
-        let idx = items
+    let ranked = pattern.match_list(
+        items
             .iter()
             .enumerate()
-            .find(|(i, x)| *x == item && !used[*i])
-            .map(|(i, _)| i)
-            .expect("matched item came from items");
-        used[idx] = true;
-        out.push(idx);
-    }
-    out
+            .map(|(index, item)| Match { item, index }),
+        &mut matcher,
+    );
+    ranked.into_iter().map(|(m, _)| m.index).collect()
 }
 
 pub fn split_path_query(q: &str) -> (&str, &str) {
@@ -135,6 +142,14 @@ mod tests {
     fn no_match_filters_all() {
         let it = items(&["a.rs", "b.rs"]);
         assert!(fuzzy_filter(&it, "zzzz").is_empty());
+    }
+
+    #[test]
+    fn repeated_items_keep_their_own_index() {
+        let it = items(&["src/main.rs", "src/mod.rs", "src/main.rs"]);
+        let mut ord = fuzzy_filter(&it, "main.rs");
+        ord.sort();
+        assert_eq!(ord, vec![0, 2]);
     }
 
     #[test]
