@@ -1,5 +1,4 @@
 # TODO
-- git ignored files won't show in ctrl-p unless a toggle f5 is pressed. This doesn't apply to :e or :pwd files or paths. Don't call git commands for git features. If needed use something like libgit2 or its rust binding.
 - Arrow keys should work in all modes for cursor navigation.
 - Add :split :vsplit :hsplit to split the view. :split and :vsplit will virtically split the viewer into left and right. :hsplit horizontal split. Swap windows with ctrl-w w like neovim. Show separate tab views in each split.
 - Use tokyo night theme as default. You can reference ~/dotfiles/kitty/current-theme.conf for the color values.

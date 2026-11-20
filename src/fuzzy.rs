@@ -65,26 +65,13 @@ pub fn list_dir(dir: &Path) -> Vec<String> {
 
 pub const MAX_TREE_ENTRIES: usize = 20_000;
 
-pub fn list_tree(dir: &Path) -> Vec<String> {
-    list_tree_limited(dir, MAX_TREE_ENTRIES)
-}
+pub type EntriesReader<'a> = dyn FnMut(&Path, &str) -> Vec<(String, bool)> + 'a;
 
-fn list_tree_limited(dir: &Path, max: usize) -> Vec<String> {
+pub fn walk_tree(dir: &Path, max: usize, read: &mut EntriesReader<'_>) -> Vec<String> {
     let mut out = Vec::new();
     let mut queue = std::collections::VecDeque::from([String::new()]);
     while let Some(prefix) = queue.pop_front() {
-        let Ok(entries) = std::fs::read_dir(dir.join(&prefix)) else {
-            continue;
-        };
-        let mut names: Vec<(String, bool)> = entries
-            .flatten()
-            .filter_map(|e| {
-                let name = e.file_name().to_string_lossy().to_string();
-                (!name.starts_with('.')).then(|| (name, e.file_type().is_ok_and(|t| t.is_dir())))
-            })
-            .collect();
-        names.sort();
-        for (name, is_dir) in names {
+        for (name, is_dir) in read(&dir.join(&prefix), &prefix) {
             let rel = format!("{prefix}{name}");
             if is_dir {
                 out.push(format!("{rel}/"));
@@ -102,9 +89,28 @@ fn list_tree_limited(dir: &Path, max: usize) -> Vec<String> {
     out
 }
 
+pub fn visible_entries(dir: &Path) -> Vec<(String, bool)> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut out: Vec<(String, bool)> = entries
+        .flatten()
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().to_string();
+            (!name.starts_with('.')).then(|| (name, e.file_type().is_ok_and(|t| t.is_dir())))
+        })
+        .collect();
+    out.sort();
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn tree(dir: &Path, max: usize) -> Vec<String> {
+        walk_tree(dir, max, &mut |d, _| visible_entries(d))
+    }
 
     fn items(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| s.to_string()).collect()
@@ -159,7 +165,7 @@ mod tests {
     }
 
     #[test]
-    fn list_tree_walks_subdirectories_shallow_first() {
+    fn walk_tree_lists_subdirectories_shallow_first() {
         let dir = std::env::temp_dir().join(format!("deditor_tree_{}", std::process::id()));
         std::fs::remove_dir_all(&dir).ok();
         std::fs::create_dir_all(dir.join("sub/deep")).unwrap();
@@ -168,11 +174,28 @@ mod tests {
         std::fs::write(dir.join("sub/deep/c.txt"), "x").unwrap();
         std::fs::write(dir.join(".hidden"), "x").unwrap();
         assert_eq!(
-            list_tree(&dir),
+            tree(&dir, MAX_TREE_ENTRIES),
             items(&["a.txt", "sub/", "sub/b.txt", "sub/deep/", "sub/deep/c.txt"])
         );
-        assert_eq!(list_tree_limited(&dir, 2), items(&["a.txt", "sub/"]));
-        assert!(list_tree(&dir.join("missing")).is_empty());
+        assert_eq!(tree(&dir, 2), items(&["a.txt", "sub/"]));
+        assert!(tree(&dir.join("missing"), MAX_TREE_ENTRIES).is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn walk_tree_skips_branches_the_reader_drops() {
+        let dir = std::env::temp_dir().join(format!("deditor_walk_{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(dir.join("sub/deep")).unwrap();
+        std::fs::write(dir.join("a.txt"), "x").unwrap();
+        std::fs::write(dir.join("sub/b.txt"), "x").unwrap();
+        let dropped = walk_tree(&dir, MAX_TREE_ENTRIES, &mut |d, _| {
+            visible_entries(d)
+                .into_iter()
+                .filter(|(name, _)| name != "sub")
+                .collect()
+        });
+        assert_eq!(dropped, items(&["a.txt"]));
         std::fs::remove_dir_all(&dir).ok();
     }
 }

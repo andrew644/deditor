@@ -68,6 +68,7 @@ pub struct Editor {
     pub panel_order: Vec<usize>,
     pub panel_cursor: usize,
     pub panel_root: String,
+    pub show_ignored: bool,
     pub completions: Option<Completions>,
     pub lsp: crate::lsp::LspManager,
     pub context_menu: Option<String>,
@@ -170,6 +171,7 @@ impl Editor {
             panel_order: Vec::new(),
             panel_cursor: 0,
             panel_root: String::new(),
+            show_ignored: false,
             completions: None,
             lsp: crate::lsp::LspManager::new(),
             context_menu: None,
@@ -1508,6 +1510,24 @@ impl Editor {
         }
     }
 
+    pub fn toggle_ignored(&mut self) {
+        self.show_ignored = !self.show_ignored;
+        self.set_status(
+            format!(
+                "ignored files: {}",
+                if self.show_ignored { "shown" } else { "hidden" }
+            ),
+            false,
+        );
+        if self.panel == crate::fuzzy::Panel::Files {
+            let dir = crate::fuzzy::split_path_query(&self.panel_query)
+                .0
+                .to_string();
+            self.load_files_entries(&dir);
+            self.refresh_panel_order();
+        }
+    }
+
     pub fn toggle_spell(&mut self) {
         self.config.spellcheck = !self.config.spellcheck;
         if !self.config.spellcheck {
@@ -1534,8 +1554,9 @@ impl Editor {
         self.panel_query.clear();
         self.panel_cursor = 0;
         self.panel_root = String::new();
+        let files = files_entries("", !self.show_ignored);
         self.panel_items = match kind {
-            crate::fuzzy::Panel::Files => crate::fuzzy::list_tree(&files_root("")),
+            crate::fuzzy::Panel::Files => files,
             crate::fuzzy::Panel::Buffers => self
                 .buffers
                 .iter()
@@ -1575,12 +1596,18 @@ impl Editor {
     }
 
     fn rescan_files_panel(&mut self) {
-        let (dir, _) = crate::fuzzy::split_path_query(&self.panel_query);
+        let dir = crate::fuzzy::split_path_query(&self.panel_query)
+            .0
+            .to_string();
         if dir == self.panel_root {
             return;
         }
-        self.panel_root = dir.to_string();
-        self.panel_items = crate::fuzzy::list_tree(&files_root(dir));
+        self.panel_root = dir.clone();
+        self.load_files_entries(&dir);
+    }
+
+    fn load_files_entries(&mut self, dir: &str) {
+        self.panel_items = files_entries(dir, !self.show_ignored);
     }
 
     pub fn panel_type(&mut self, c: char) {
@@ -1839,6 +1866,25 @@ fn completion_target(cmdline: &str) -> Option<(String, String, String)> {
         dir.to_string(),
         arg[cut..].to_string(),
     ))
+}
+
+fn files_entries(dir: &str, hide_ignored: bool) -> Vec<String> {
+    let root = files_root(dir);
+    let mut matchers = ignore::WalkBuilder::new(&root).build_matchers();
+    let matcher = matchers
+        .first_mut()
+        .expect("the walk has one configured root");
+    crate::fuzzy::walk_tree(&root, crate::fuzzy::MAX_TREE_ENTRIES, &mut |dir, prefix| {
+        crate::fuzzy::visible_entries(dir)
+            .into_iter()
+            .filter(|(name, is_dir)| {
+                !hide_ignored
+                    || !matcher
+                        .matched(format!("{prefix}{name}"), *is_dir)
+                        .is_ignore()
+            })
+            .collect()
+    })
 }
 
 fn files_root(dir: &str) -> std::path::PathBuf {
@@ -2294,6 +2340,62 @@ mod tests {
         assert_eq!(ed.buf().display_name(), "client.rs");
         assert_eq!(text(&ed), "nested\n");
         assert_eq!(ed.panel, crate::fuzzy::Panel::None);
+        std::env::set_current_dir(&saved).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn files_panel_hides_ignored_files_until_toggled() {
+        let _cwd = CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let dir = std::env::temp_dir().join(format!("deditor_panel_ignore_{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(dir.join("target/deep")).unwrap();
+        std::fs::create_dir_all(dir.join(".git/info")).unwrap();
+        std::fs::write(dir.join(".git/info/exclude"), "excluded.txt\n").unwrap();
+        std::fs::write(dir.join(".gitignore"), "ignored.txt\ntarget/\n").unwrap();
+        std::fs::write(dir.join("excluded.txt"), "w\n").unwrap();
+        std::fs::write(dir.join("ignored.txt"), "x\n").unwrap();
+        std::fs::write(dir.join("main.rs"), "y\n").unwrap();
+        std::fs::write(dir.join("target/deep/out.o"), "z\n").unwrap();
+        std::fs::write(dir.join(".dotfile"), "q\n").unwrap();
+        let saved = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+        let mut ed = Editor::test_new();
+        ed.open_panel(crate::fuzzy::Panel::Files);
+        assert_eq!(ed.panel_items, vec!["main.rs".to_string()]);
+        ed.toggle_ignored();
+        assert_eq!(
+            ed.panel_items,
+            vec![
+                "excluded.txt".to_string(),
+                "ignored.txt".to_string(),
+                "main.rs".to_string(),
+                "target/".to_string(),
+                "target/deep/".to_string(),
+                "target/deep/out.o".to_string()
+            ]
+        );
+        assert_eq!(ed.status.as_deref(), Some("ignored files: shown"));
+        ed.toggle_ignored();
+        assert_eq!(ed.panel_items, vec!["main.rs".to_string()]);
+        std::env::set_current_dir(&saved).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn path_completions_include_ignored_files() {
+        let _cwd = CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let dir = completion_tree("ignored");
+        std::fs::write(dir.join(".gitignore"), "*.txt\n").unwrap();
+        let saved = std::env::current_dir().unwrap();
+        let mut ed = ed_in(&dir);
+        ed.cmdline = "e b".to_string();
+        ed.complete_next();
+        assert_eq!(completion_names(&ed), vec!["beta.rs", "beta.txt"]);
         std::env::set_current_dir(&saved).unwrap();
         std::fs::remove_dir_all(&dir).ok();
     }

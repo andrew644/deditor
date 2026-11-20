@@ -22,6 +22,11 @@ pub(crate) fn key_down(ed: &mut Editor, key: &Key, mods: ModifiersState) {
         ed.toggle_spell();
         return;
     }
+    if *key == Key::Named(NamedKey::F5) {
+        ed.toggle_ignored();
+        return;
+    }
+
     if *key == Key::Named(NamedKey::F2) {
         ed.config.show_whitespace = !ed.config.show_whitespace;
         ed.set_status(
@@ -1414,6 +1419,18 @@ mod tests {
         type_keys(&mut ed, &[Key::Named(NamedKey::F1)]);
         assert!(!ed.config.spellcheck);
         assert_eq!(ed.status.as_deref(), Some("spellcheck: off"));
+    }
+
+    #[test]
+    fn f5_toggles_ignored_files() {
+        let mut ed = Editor::test_new();
+        assert!(!ed.show_ignored);
+        type_keys(&mut ed, &[Key::Named(NamedKey::F5)]);
+        assert!(ed.show_ignored);
+        assert_eq!(ed.status.as_deref(), Some("ignored files: shown"));
+        type_keys(&mut ed, &[Key::Named(NamedKey::F5)]);
+        assert!(!ed.show_ignored);
+        assert_eq!(ed.status.as_deref(), Some("ignored files: hidden"));
     }
 
     #[test]

@@ -184,6 +184,11 @@ are elided from the left so the file name stays visible. The text after the last
 same), `../` moves the root up, `~/` starts at the home directory, and `/path/`
 makes an absolute path the root.
 
+Files and directories that git ignores (`.gitignore`, `.git/info/exclude` and the
+configured global ignore file) are left out of the list; `F5` toggles them back
+in. Ignored directories are never walked. Path completion for `:e` and `:pwd` is
+not filtered and lists everything.
+
 ## Global
 
 | Key | Action |
@@ -191,6 +196,7 @@ makes an absolute path the root.
 | `F1` | toggle spellcheck |
 | `F2` | toggle whitespace display |
 | `F3` | toggle dark / light theme |
+| `F5` | show / hide git-ignored files in the file panel |
 
 Mouse: wheel scrolls, left-click switches tabs, right-click opens a context
 menu of relevant keys for the word under the pointer (e.g. `gd`, `K`, `viw`).
