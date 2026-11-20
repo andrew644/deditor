@@ -59,6 +59,7 @@ pub struct Editor {
     pub view_cols: usize,
     pub prefer_x: Option<usize>,
     pub cmdline: String,
+    pub cmdline_col: usize,
     pub cmd_kind: Option<mode::CmdKind>,
     pub search: Option<String>,
     pub search_back: bool,
@@ -162,6 +163,7 @@ impl Editor {
             view_cols: 80,
             prefer_x: None,
             cmdline: String::new(),
+            cmdline_col: 0,
             cmd_kind: None,
             search_back: false,
             search: None,
@@ -891,6 +893,41 @@ impl Editor {
         self.buf_mut().clamp();
     }
 
+    pub fn move_caret(&mut self, dir: crate::motions::Caret) {
+        use crate::motions::{Caret as C, Motion as M};
+        if matches!(dir, C::Up | C::Down) {
+            self.run_motion(if dir == C::Up { M::K } else { M::J }, 1);
+            return;
+        }
+        let to = {
+            let b = self.buf();
+            let c = b.cursor;
+            let len = line_chars(&b.rope, c.line);
+            match dir {
+                C::Left if c.col > 0 => Pos {
+                    line: c.line,
+                    col: c.col - 1,
+                },
+                C::Left if c.line > 0 => Pos {
+                    line: c.line - 1,
+                    col: line_chars(&b.rope, c.line - 1),
+                },
+                C::Right if c.col < len => Pos {
+                    line: c.line,
+                    col: c.col + 1,
+                },
+                C::Right if c.line + 1 < b.rope.len_lines() => Pos {
+                    line: c.line + 1,
+                    col: 0,
+                },
+                _ => c,
+            }
+        };
+        self.prefer_x = None;
+        self.buf_mut().cursor = to;
+        self.buf_mut().clamp();
+    }
+
     pub fn run_find(&mut self, dir: mode::FindDir, ch: char, count: u32) {
         use crate::motions::Motion as M;
         let m = match dir {
@@ -1041,14 +1078,63 @@ impl Editor {
         self.cmd_kind = Some(kind);
         self.mode = Mode::Command(kind);
         self.cmdline.clear();
+        self.cmdline_col = 0;
     }
 
     pub fn close_cmdline(&mut self) {
         self.cmd_kind = None;
         self.cmdline.clear();
+        self.cmdline_col = 0;
         self.completions = None;
         self.mode = Mode::Normal;
         self.clear_pending();
+    }
+
+    pub fn cmdline_move(&mut self, delta: i32) {
+        let len = self.cmdline.chars().count();
+        let col = self.cmdline_col.min(len);
+        self.cmdline_col = if delta < 0 {
+            col.saturating_sub((-delta) as usize)
+        } else {
+            (col + delta as usize).min(len)
+        };
+    }
+
+    pub fn cmdline_insert(&mut self, c: char) {
+        let col = self.cmdline_col.min(self.cmdline.chars().count());
+        let at = self.cmdline_byte(col);
+        self.cmdline.insert(at, c);
+        self.cmdline_col = col + 1;
+        self.sync_completions();
+    }
+
+    pub fn cmdline_backspace(&mut self) {
+        let col = self.cmdline_col.min(self.cmdline.chars().count());
+        if col == 0 {
+            return;
+        }
+        let (a, b) = (self.cmdline_byte(col - 1), self.cmdline_byte(col));
+        self.cmdline.replace_range(a..b, "");
+        self.cmdline_col = col - 1;
+        self.sync_completions();
+    }
+
+    pub fn cmdline_delete(&mut self) {
+        let count = self.cmdline.chars().count();
+        let col = self.cmdline_col.min(count);
+        if col == count {
+            return;
+        }
+        let (a, b) = (self.cmdline_byte(col), self.cmdline_byte(col + 1));
+        self.cmdline.replace_range(a..b, "");
+        self.sync_completions();
+    }
+
+    fn cmdline_byte(&self, col: usize) -> usize {
+        self.cmdline
+            .char_indices()
+            .nth(col)
+            .map_or(self.cmdline.len(), |(i, _)| i)
     }
 
     pub fn search_step(&mut self, term: &str, back: bool) {
@@ -1139,6 +1225,7 @@ impl Editor {
                 self.cmd_kind = None;
                 self.completions = None;
                 self.cmdline.clear();
+                self.cmdline_col = 0;
                 self.mode = Mode::Normal;
                 match cmd {
                     Cmd::Write => self.write_active(),
@@ -1748,6 +1835,7 @@ impl Editor {
             return;
         };
         self.cmdline = format!("{prefix}{name}");
+        self.cmdline_col = self.cmdline.chars().count();
         if name.ends_with('/') {
             self.refresh_completions();
         }
@@ -3218,6 +3306,30 @@ mod tests {
         ed.complete_next();
         assert!(ed.cmdline == "e beta.rs" || ed.cmdline == "e beta.txt");
         assert_eq!(completion_names(&ed), vec!["beta.rs", "beta.txt"]);
+        std::env::set_current_dir(&saved).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn arrows_move_the_path_completion_list() {
+        let _cwd = CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let dir = completion_tree("arrows");
+        let saved = std::env::current_dir().unwrap();
+        let mut ed = ed_in(&dir);
+        ed.cmdline = "e beta".to_string();
+        ed.complete_next();
+        let first = ed.cmdline.clone();
+        press(
+            &mut ed,
+            &[winit::keyboard::Key::Named(
+                winit::keyboard::NamedKey::ArrowDown,
+            )],
+        );
+        assert!(ed.cmdline.starts_with("e beta."));
+        assert_ne!(ed.cmdline, first);
+        assert_eq!(ed.cmdline_col, ed.cmdline.chars().count());
         std::env::set_current_dir(&saved).unwrap();
         std::fs::remove_dir_all(&dir).ok();
     }

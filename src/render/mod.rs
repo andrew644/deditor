@@ -432,7 +432,8 @@ pub fn draw_content(
     }
     let cur_line = crate::buffer::line_text(&buf.rope, buf.cursor.line);
     let cur_x = (gutter + wrap.pos(&cur_line, buf.cursor.col).1) as f32 * cw;
-    if let Some(row) = cursor_row
+    if ed.cmd_kind.is_none()
+        && let Some(row) = cursor_row
         && row < rows.len()
     {
         rects.push(rects::RectInstance {
@@ -447,6 +448,18 @@ pub fn draw_content(
             color: theme.accent,
         });
     }
+
+    if ed.cmd_kind.is_some() {
+        let col = ed.cmdline_col.min(ed.cmdline.chars().count());
+        rects.push(rects::RectInstance {
+            x: (2 + col) as f32 * cw,
+            y: h - ch,
+            w: 2.0,
+            h: ch,
+            color: theme.accent,
+        });
+    }
+
     let mut gutter_s = String::new();
     let mut body_s = String::new();
     for (r, row) in rows.iter().enumerate() {

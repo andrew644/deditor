@@ -169,7 +169,13 @@ fn normal_key(ed: &mut Editor, key: &Key, mods: ModifiersState) {
         }
         return;
     }
-    let k = key_char(key);
+    let k = match key {
+        Key::Named(NamedKey::ArrowLeft) => Some("h"),
+        Key::Named(NamedKey::ArrowRight) => Some("l"),
+        Key::Named(NamedKey::ArrowUp) => Some("k"),
+        Key::Named(NamedKey::ArrowDown) => Some("j"),
+        _ => key_char(key),
+    };
     if mods.control_key() {
         let count = if ed.count == 0 { 1 } else { ed.count };
         match k {
@@ -596,6 +602,18 @@ fn insert_key(ed: &mut Editor, key: &Key, mods: ModifiersState) {
         return;
     }
     match key {
+        Key::Named(NamedKey::ArrowUp) if popup => ed.comp_prev(),
+        Key::Named(NamedKey::ArrowDown) if popup => ed.comp_next(),
+        Key::Named(NamedKey::ArrowLeft) => {
+            ed.comp_cancel();
+            ed.move_caret(crate::motions::Caret::Left);
+        }
+        Key::Named(NamedKey::ArrowRight) => {
+            ed.comp_cancel();
+            ed.move_caret(crate::motions::Caret::Right);
+        }
+        Key::Named(NamedKey::ArrowUp) => ed.move_caret(crate::motions::Caret::Up),
+        Key::Named(NamedKey::ArrowDown) => ed.move_caret(crate::motions::Caret::Down),
         Key::Named(NamedKey::Escape) if popup => ed.comp_cancel(),
         Key::Named(NamedKey::Enter) if popup => ed.comp_accept(),
         Key::Named(NamedKey::Tab) if popup => ed.comp_accept(),
@@ -776,22 +794,18 @@ fn command_key(ed: &mut Editor, key: &Key, mods: ModifiersState) {
         }
         Key::Named(NamedKey::ArrowDown) if ex => ed.completion_move(1),
         Key::Named(NamedKey::ArrowUp) if ex => ed.completion_move(-1),
-        Key::Named(NamedKey::Backspace) => {
-            ed.cmdline.pop();
-            ed.sync_completions();
-        }
+        Key::Named(NamedKey::ArrowLeft) => ed.cmdline_move(-1),
+        Key::Named(NamedKey::ArrowRight) => ed.cmdline_move(1),
+        Key::Named(NamedKey::Backspace) => ed.cmdline_backspace(),
+        Key::Named(NamedKey::Delete) => ed.cmdline_delete(),
         Key::Character(s) => {
             if let Some(c) = s.chars().next()
                 && !c.is_control()
             {
-                ed.cmdline.push(c);
-                ed.sync_completions();
+                ed.cmdline_insert(c);
             }
         }
-        Key::Named(NamedKey::Space) => {
-            ed.cmdline.push(' ');
-            ed.sync_completions();
-        }
+        Key::Named(NamedKey::Space) => ed.cmdline_insert(' '),
         _ => {}
     }
 }
@@ -1431,6 +1445,161 @@ mod tests {
         type_keys(&mut ed, &[Key::Named(NamedKey::F5)]);
         assert!(!ed.show_ignored);
         assert_eq!(ed.status.as_deref(), Some("ignored files: hidden"));
+    }
+
+    #[test]
+    fn arrow_keys_move_the_cursor_in_normal_mode() {
+        let mut ed = Editor::test_new();
+        ed.buf_mut().insert_text("one\ntwo\nthree\n", false);
+        ed.buf_mut().cursor = Pos { line: 0, col: 0 };
+        type_keys(&mut ed, &[Key::Named(NamedKey::ArrowDown)]);
+        assert_eq!(ed.buf().cursor, Pos { line: 1, col: 0 });
+        type_keys(&mut ed, &[Key::Named(NamedKey::ArrowRight)]);
+        assert_eq!(ed.buf().cursor, Pos { line: 1, col: 1 });
+        type_keys(
+            &mut ed,
+            &[Key::Character("2".into()), Key::Named(NamedKey::ArrowUp)],
+        );
+        assert_eq!(ed.buf().cursor, Pos { line: 0, col: 1 });
+        type_keys(&mut ed, &[Key::Named(NamedKey::ArrowDown)]);
+        assert_eq!(ed.buf().cursor, Pos { line: 1, col: 1 });
+        type_keys(&mut ed, &[Key::Named(NamedKey::ArrowLeft)]);
+        assert_eq!(ed.buf().cursor, Pos { line: 1, col: 0 });
+    }
+
+    #[test]
+    fn arrow_keys_extend_the_visual_selection() {
+        let mut ed = Editor::test_new();
+        ed.buf_mut().insert_text("one\ntwo\n", false);
+        ed.buf_mut().cursor = Pos { line: 0, col: 0 };
+        type_keys(
+            &mut ed,
+            &[
+                Key::Character("v".into()),
+                Key::Named(NamedKey::ArrowDown),
+                Key::Named(NamedKey::ArrowRight),
+            ],
+        );
+        assert_eq!(ed.mode, Mode::Visual);
+        assert_eq!(ed.visual_anchor, Some(Pos { line: 0, col: 0 }));
+        assert_eq!(ed.buf().cursor, Pos { line: 1, col: 1 });
+    }
+
+    #[test]
+    fn arrow_keys_move_the_caret_in_insert_mode() {
+        let mut ed = Editor::test_new();
+        ed.buf_mut().insert_text("ab\ncd\n", false);
+        ed.buf_mut().cursor = Pos { line: 0, col: 0 };
+        type_keys(
+            &mut ed,
+            &[Key::Character("i".into()), Key::Named(NamedKey::ArrowLeft)],
+        );
+        assert_eq!(ed.buf().cursor, Pos { line: 0, col: 0 });
+        for _ in 0..3 {
+            type_keys(&mut ed, &[Key::Named(NamedKey::ArrowRight)]);
+        }
+        assert_eq!(ed.buf().cursor, Pos { line: 1, col: 0 });
+        type_keys(&mut ed, &[Key::Character("X".into())]);
+        assert_eq!(ed.buf().cursor, Pos { line: 1, col: 1 });
+        assert_eq!(ed.buf().rope.to_string(), "ab\nXcd\n");
+        type_keys(
+            &mut ed,
+            &[Key::Named(NamedKey::ArrowLeft), Key::Character("Y".into())],
+        );
+        assert_eq!(ed.buf().rope.to_string(), "ab\nYXcd\n");
+        type_keys(&mut ed, &[Key::Named(NamedKey::ArrowUp)]);
+        assert_eq!(ed.buf().cursor.line, 0);
+    }
+
+    #[test]
+    fn arrow_keys_move_the_command_line_caret() {
+        let mut ed = Editor::test_new();
+        ed.open_cmdline(crate::mode::CmdKind::Ex);
+        type_keys(
+            &mut ed,
+            &[Key::Character("w".into()), Key::Character("q".into())],
+        );
+        assert_eq!(ed.cmdline, "wq");
+        assert_eq!(ed.cmdline_col, 2);
+        type_keys(
+            &mut ed,
+            &[
+                Key::Named(NamedKey::ArrowLeft),
+                Key::Named(NamedKey::ArrowLeft),
+            ],
+        );
+        assert_eq!(ed.cmdline_col, 0);
+        type_keys(&mut ed, &[Key::Character("x".into())]);
+        assert_eq!(ed.cmdline, "xwq");
+        assert_eq!(ed.cmdline_col, 1);
+        type_keys(
+            &mut ed,
+            &[
+                Key::Named(NamedKey::ArrowRight),
+                Key::Named(NamedKey::ArrowRight),
+                Key::Named(NamedKey::ArrowRight),
+            ],
+        );
+        assert_eq!(ed.cmdline_col, 3);
+        type_keys(&mut ed, &[Key::Named(NamedKey::ArrowRight)]);
+        assert_eq!(ed.cmdline_col, 3);
+    }
+
+    #[test]
+    fn command_line_inserts_and_deletes_at_the_caret() {
+        let mut ed = Editor::test_new();
+        ed.open_cmdline(crate::mode::CmdKind::Ex);
+        for c in "abc".chars() {
+            type_keys(&mut ed, &[Key::Character(c.to_string().into())]);
+        }
+        type_keys(
+            &mut ed,
+            &[
+                Key::Named(NamedKey::ArrowLeft),
+                Key::Named(NamedKey::ArrowLeft),
+            ],
+        );
+        assert_eq!(ed.cmdline_col, 1);
+        type_keys(&mut ed, &[Key::Named(NamedKey::Backspace)]);
+        assert_eq!((ed.cmdline.as_str(), ed.cmdline_col), ("bc", 0));
+        type_keys(&mut ed, &[Key::Named(NamedKey::Backspace)]);
+        assert_eq!(ed.cmdline, "bc");
+        type_keys(&mut ed, &[Key::Named(NamedKey::Delete)]);
+        assert_eq!(ed.cmdline, "c");
+        type_keys(&mut ed, &[Key::Named(NamedKey::ArrowRight)]);
+        type_keys(&mut ed, &[Key::Named(NamedKey::Delete)]);
+        assert_eq!(ed.cmdline, "c");
+    }
+
+    #[test]
+    fn arrows_pick_completion_popup_items_in_insert_mode() {
+        let mut ed = Editor::test_new();
+        ed.buf_mut().insert_text("wor\n", false);
+        ed.buf_mut().cursor = Pos { line: 0, col: 3 };
+        ed.enter_insert();
+        ed.lsp.completion = Some(crate::lsp::CompletionState {
+            items: vec![
+                crate::lsp::CompItem {
+                    kind: 'f',
+                    text: "word".into(),
+                },
+                crate::lsp::CompItem {
+                    kind: 'f',
+                    text: "work".into(),
+                },
+            ],
+            selected: 0,
+            line: 0,
+            col: 3,
+            seq: 0,
+            prefix: "wor".into(),
+        });
+        type_keys(&mut ed, &[Key::Named(NamedKey::ArrowDown)]);
+        assert_eq!(ed.lsp.completion.as_ref().unwrap().selected, 1);
+        assert_eq!(ed.buf().cursor, Pos { line: 0, col: 3 });
+        type_keys(&mut ed, &[Key::Named(NamedKey::ArrowLeft)]);
+        assert!(ed.lsp.completion.is_none());
+        assert_eq!(ed.buf().cursor, Pos { line: 0, col: 2 });
     }
 
     #[test]

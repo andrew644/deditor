@@ -18,6 +18,7 @@ A numeric prefix (`count`) works with motions and most edits, e.g. `3w`, `5x`, `
 | Key | Action |
 | --- | --- |
 | `h` `j` `k` `l` | left / down / up / right |
+| arrow keys | same as `h` `j` `k` `l` (also in visual mode and after an operator) |
 | `w` `b` | next / previous word start (punctuation-aware) |
 | `W` `B` | next / previous WORD start (whitespace-separated) |
 | `e` `E` | end of word / WORD |
@@ -102,12 +103,13 @@ is missing it is silently skipped.
 | printable keys | insert text |
 | `Enter` | newline (auto-indent continues) |
 | `Backspace` `Delete` | delete backward / forward |
+| arrow keys | move the caret, across line ends |
 | `Tab` | insert spaces up to the next `tab_width` stop |
 | `Esc` `Ctrl-c` `Ctrl-[` | return to normal mode |
 
-LSP completion popup (when shown): `Ctrl-n` / `Ctrl-p` navigate,
-`Ctrl-y` / `Ctrl-e` / `Enter` / `Tab` accept, `Esc` / `Ctrl-c` dismiss,
-typing filters by prefix.
+LSP completion popup (when shown): `Ctrl-n` / `Ctrl-p` or `Up` / `Down` navigate,
+`Ctrl-y` / `Ctrl-e` / `Enter` / `Tab` accept, `Esc` / `Ctrl-c` dismiss, `Left` /
+`Right` dismiss the popup and move the caret, typing filters by prefix.
 
 ## Visual mode
 
@@ -149,6 +151,11 @@ rectangle segment per line, padding short lines.
 | `:settings` | open the settings panel |
 
 `Esc` or `Ctrl-c` aborts; `Enter` executes. `~` is expanded in paths.
+
+`Left` / `Right` move the caret inside the command line: typing inserts at the
+caret, `Backspace` deletes before it and `Delete` at it. Search input (`/`, `?`)
+edits the same way; `Up` / `Down` are taken by the completion popup and do
+nothing in search.
 
 `:e`, `:edit` and `:pwd` complete paths. `Tab` lists the entries of the typed
 directory in a popup next to the command line and inserts the top match; further

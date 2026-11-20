@@ -36,6 +36,16 @@ pub enum Motion {
     LineUp,
 }
 
+/// Caret movement for insert mode, where the caret may sit after the last
+/// character of a line and crosses line boundaries.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Caret {
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
 pub fn char_is_word(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
 }
