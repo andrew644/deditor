@@ -273,6 +273,32 @@ fn place_popup(want: f32, size: f32, origin: f32, span: f32) -> f32 {
     want.min(origin + span - size).max(origin)
 }
 
+/// Background of a popup plus the highlight of `sel_row`, when it has one.
+fn popup_rects(
+    overlay: &mut Vec<rects::RectInstance>,
+    theme: &crate::config::RgbTheme,
+    (x, y, w, h): (f32, f32, f32, f32),
+    sel_row: Option<usize>,
+    ch: f32,
+) {
+    overlay.push(rects::RectInstance {
+        x,
+        y,
+        w,
+        h,
+        color: theme.popup_bg,
+    });
+    if let Some(row) = sel_row {
+        overlay.push(rects::RectInstance {
+            x,
+            y: y + row as f32 * ch,
+            w,
+            h: ch,
+            color: theme.popup_sel,
+        });
+    }
+}
+
 /// Text of the buffer line a screen-row loop last looked at. Wrapped lines
 /// repeat the same buffer line over many screen rows.
 struct LineCache {
@@ -842,13 +868,13 @@ pub fn draw_content(
         let hx = place_popup(ox + gutter as f32 * cw + 10.0 * cw, hw, ox, wc);
         let hy = place_popup(oy + row * ch + ch, (nrows + 1.0) * ch, oy + ch, wh - ch);
         hover_pos = Some((hx, hy));
-        overlay.push(rects::RectInstance {
-            x: hx,
-            y: hy,
-            w: hw,
-            h: (nrows + 1.0) * ch,
-            color: theme.popup_bg,
-        });
+        popup_rects(
+            &mut overlay,
+            theme,
+            (hx, hy, hw, (nrows + 1.0) * ch),
+            None,
+            ch,
+        );
     }
 
     let menu_raw = ed.context_menu.clone().unwrap_or_default();
@@ -868,13 +894,13 @@ pub fn draw_content(
             wh - ch,
         );
         menu_pos = Some((mx, my));
-        overlay.push(rects::RectInstance {
-            x: mx,
-            y: my,
-            w: mw,
-            h: (mrows + 1.0) * ch,
-            color: theme.popup_bg,
-        });
+        popup_rects(
+            &mut overlay,
+            theme,
+            (mx, my, mw, (mrows + 1.0) * ch),
+            None,
+            ch,
+        );
     }
 
     let mut comp_s = String::new();
@@ -917,22 +943,13 @@ pub fn draw_content(
         let cx = place_popup(ox + (gutter as f32 + cs.col as f32) * cw, cwid, ox, wc);
         let cy = place_popup(oy + (row + 1.0) * ch, nrows * ch, oy + ch, wh - ch);
         comp_pos = Some((cx, cy, nrows));
-        overlay.push(rects::RectInstance {
-            x: cx,
-            y: cy,
-            w: cwid,
-            h: nrows * ch,
-            color: theme.popup_bg,
-        });
-        if n > 0 {
-            overlay.push(rects::RectInstance {
-                x: cx,
-                y: cy + comp_sel_row as f32 * ch,
-                w: cwid,
-                h: ch,
-                color: theme.popup_sel,
-            });
-        }
+        popup_rects(
+            &mut overlay,
+            theme,
+            (cx, cy, cwid, nrows * ch),
+            (n > 0).then_some(comp_sel_row),
+            ch,
+        );
     }
 
     let mut popup_s = String::new();
@@ -963,22 +980,13 @@ pub fn draw_content(
                 box_cols,
             ));
         }
-        overlay.push(rects::RectInstance {
-            x: ox,
-            y: wy,
-            w: pw,
-            h: (1 + shown) as f32 * ch,
-            color: theme.popup_bg,
-        });
-        if !ed.panel_order.is_empty() {
-            overlay.push(rects::RectInstance {
-                x: ox,
-                y: wy + (1 + sel_row) as f32 * ch,
-                w: pw,
-                h: ch,
-                color: theme.popup_sel,
-            });
-        }
+        popup_rects(
+            &mut overlay,
+            theme,
+            (ox, wy, pw, (1 + shown) as f32 * ch),
+            (!ed.panel_order.is_empty()).then_some(1 + sel_row),
+            ch,
+        );
     }
 
     let mut cpl_s = String::new();
@@ -1010,20 +1018,13 @@ pub fn draw_content(
             (cw, ch),
         );
         cpl_pos = Some((cx, cy));
-        overlay.push(rects::RectInstance {
-            x: cx,
-            y: cy,
-            w: box_w,
-            h: box_h,
-            color: theme.popup_bg,
-        });
-        overlay.push(rects::RectInstance {
-            x: cx,
-            y: cy + sel_row as f32 * ch,
-            w: box_w,
-            h: ch,
-            color: theme.popup_sel,
-        });
+        popup_rects(
+            &mut overlay,
+            theme,
+            (cx, cy, box_w, box_h),
+            Some(sel_row),
+            ch,
+        );
     }
 
     let mut tb_msg = mkbuf(ts, &left_s, w, h);
