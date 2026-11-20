@@ -35,9 +35,10 @@ pub enum Pending {
     None,
     Op(Operator),
     G,
+    Z,
+    WinCmd,
     F { forward: bool, to: bool },
     R,
-    Z,
     TextObj { op: Operator, inner: bool },
     OpG { op: Operator },
 }

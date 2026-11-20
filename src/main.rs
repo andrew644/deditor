@@ -21,6 +21,7 @@ mod render;
 mod search;
 mod spell;
 mod textobjects;
+mod window;
 mod wrap;
 
 use app::Editor;
@@ -64,6 +65,7 @@ fn main() -> Result<()> {
         tab_ranges: Vec::new(),
         pointer_tab: false,
         last_mouse: None,
+        win_rects: Vec::new(),
         text_sig: ("monospace".into(), 14.0),
         proxy: Some(event_loop.create_proxy()),
         pump_armed: false,
@@ -83,9 +85,10 @@ struct App {
     editor: Option<Editor>,
     ime_allowed: bool,
     mods: winit::keyboard::ModifiersState,
-    tab_ranges: Vec<(f32, f32)>,
+    tab_ranges: Vec<render::TabHit>,
     pointer_tab: bool,
     last_mouse: Option<(f64, f64)>,
+    win_rects: Vec<render::WinRect>,
     text_sig: (String, f32),
     proxy: Option<winit::event_loop::EventLoopProxy<()>>,
     pump_armed: bool,
@@ -186,8 +189,8 @@ impl ApplicationHandler for App {
                 {
                     if let Some(ed) = &mut self.editor {
                         let i = (d - 1) as usize;
-                        if i < ed.buffers.len() {
-                            ed.activate(i);
+                        if let Some(&buf) = ed.win().tabs.get(i) {
+                            ed.activate(buf);
                             ed.ensure_lsp();
                         }
                     }
@@ -224,18 +227,23 @@ impl ApplicationHandler for App {
             }
             WindowEvent::Ime(_) => {}
             WindowEvent::MouseWheel { delta, .. } => {
+                let over = self.last_mouse.and_then(|(x, y)| self.win_under(x, y));
                 if let (Some(ed), Some(ts)) = (&mut self.editor, &self.text) {
                     let ch = ts.cell_h.max(1.0);
                     let notches = match delta {
                         MouseScrollDelta::LineDelta(_, y) => y as f64,
                         MouseScrollDelta::PixelDelta(pos) => pos.y / ch as f64,
                     };
+                    let win = over.unwrap_or(ed.active_win);
+                    let buf = ed.windows[win].cur_buf();
+                    let cols = ed.windows[win].view_cols.max(1);
                     let (top, sub) = {
-                        let b = ed.buf();
+                        let b = &ed.buffers[buf];
                         let notches = (notches * 3.0).round() as i64;
-                        ed.wrap().scroll(&b.rope, b.view_top, b.view_sub, -notches)
+                        ed.wrap_with(cols)
+                            .scroll(&b.rope, b.view_top, b.view_sub, -notches)
                     };
-                    let b = ed.buf_mut();
+                    let b = &mut ed.buffers[buf];
                     b.view_top = top;
                     b.view_sub = sub;
                     if let Some(w) = &self.window {
@@ -268,11 +276,12 @@ impl ApplicationHandler for App {
                 let hit = self.hit_tab(mx, my);
                 if let Some(ed) = &mut self.editor {
                     ed.context_menu = None;
-                    if let Some(i) = hit
-                        && i < ed.buffers.len()
-                    {
-                        ed.activate(i);
-                        ed.ensure_lsp();
+                    if let Some((win, tab)) = hit {
+                        ed.focus_win(win);
+                        if let Some(&buf) = ed.windows[win].tabs.get(tab) {
+                            ed.activate(buf);
+                            ed.ensure_lsp();
+                        }
                     }
                 }
                 if let Some(w) = &self.window {
@@ -301,13 +310,23 @@ impl ApplicationHandler for App {
                 };
                 let cw = ts.cell_w.max(1.0) as f64;
                 let ch = ts.cell_h.max(1.0) as f64;
-                let screen_row = (my / ch) as i64 - 1;
-                if screen_row < 0 {
+                let cx = (mx / cw) as u32;
+                let cy = (my / ch) as u32;
+                let Some(r) = self
+                    .win_rects
+                    .iter()
+                    .find(|r| cx >= r.x && cx < r.x + r.cols && cy >= r.y && cy < r.y + r.height)
+                else {
+                    return;
+                };
+                if cy <= r.y {
                     return;
                 }
-                let gutter = render::gutter_cols(ed) as usize;
-                let xcell = ((mx / cw) as usize).saturating_sub(gutter);
-                let pos = ed.pos_at_cell(screen_row as usize, xcell);
+                let hit = r.win;
+                let drow = cy.saturating_sub(r.y + 1) as usize;
+                let xcell = cx.saturating_sub(r.x + r.gutter) as usize;
+                ed.focus_win(hit);
+                let pos = ed.pos_at_window(hit, drow, xcell);
                 ed.buf_mut().cursor = pos;
                 {
                     let b = ed.buf_mut();
@@ -347,14 +366,20 @@ impl ApplicationHandler for App {
 }
 
 impl App {
-    fn hit_tab(&self, x: f64, y: f64) -> Option<usize> {
-        let ch = self.text.as_ref()?.cell_h.max(1.0);
-        if y >= ch as f64 {
-            return None;
-        }
+    fn hit_tab(&self, x: f64, y: f64) -> Option<(usize, usize)> {
         self.tab_ranges
             .iter()
-            .position(|(a, b)| x >= *a as f64 && x < *b as f64)
+            .find(|r| x >= r.x0 as f64 && x < r.x1 as f64 && y >= r.y0 as f64 && y < r.y1 as f64)
+            .map(|r| (r.win, r.tab))
+    }
+    fn win_under(&self, x: f64, y: f64) -> Option<usize> {
+        let ts = self.text.as_ref()?;
+        let cx = (x / ts.cell_w.max(1.0) as f64) as u32;
+        let cy = (y / ts.cell_h.max(1.0) as f64) as u32;
+        self.win_rects
+            .iter()
+            .find(|r| cx >= r.x && cx < r.x + r.cols && cy >= r.y && cy < r.y + r.height)
+            .map(|r| r.win)
     }
 
     fn sync_ime(&mut self) {
@@ -380,15 +405,17 @@ impl App {
             return;
         };
         let l = render::Layout::new(gpu, ts, ed);
-        let wrap = ed.wrap();
+        let Some(r) = l.wins.iter().find(|r| r.win == ed.active_win) else {
+            return;
+        };
         let b = ed.buf();
+        let wrap = ed.wrap_with(ed.win().view_cols.max(1));
         let line = buffer::line_text(&b.rope, b.cursor.line);
         let row = wrap
             .screen_row(&b.rope, b.view_top, b.view_sub, b.cursor)
             .unwrap_or(0);
-        let x =
-            (l.gutter_cols as usize + wrap.pos(&line, b.cursor.col).1) as f64 * ts.cell_w as f64;
-        let y = (1 + row) as f64 * ts.cell_h as f64;
+        let x = (r.x + r.gutter + wrap.pos(&line, b.cursor.col).1 as u32) as f64 * ts.cell_w as f64;
+        let y = (r.y + 1 + row as u32) as f64 * ts.cell_h as f64;
         w.set_ime_cursor_area(
             PhysicalPosition::new(x, y),
             PhysicalSize::new(ts.cell_w as u32 * 4, ts.cell_h as u32),
@@ -454,14 +481,20 @@ impl App {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
         let grid = render::Layout::new(gpu, text, ed);
-        ed.view_rows = grid.rows as usize;
-        ed.view_cols = (grid.cols as usize)
-            .saturating_sub(grid.gutter_cols as usize)
-            .max(1);
+        for w in &grid.wins {
+            if let Some(win) = ed.windows.get_mut(w.win) {
+                win.view_rows = w.body_rows() as usize;
+                win.view_cols = (w.cols as usize).saturating_sub(w.gutter as usize).max(1);
+            }
+        }
         ed.poll_lsp();
-        ed.scroll_to_cursor(grid.rows as usize);
+        for w in &grid.wins {
+            ed.scroll_win_to_cursor(w.win, w.body_rows() as usize);
+        }
         let lsp_busy = ed.lsp.busy();
-        self.tab_ranges = render::tab_hit_ranges(ed, text.cell_w.max(1.0));
+        self.tab_ranges =
+            render::tab_hit_ranges(ed, &grid, text.cell_w.max(1.0), text.cell_h.max(1.0));
+        self.win_rects = grid.wins.clone();
         if lsp_busy
             && !self.pump_armed
             && let Some(p) = self.proxy.clone()

@@ -96,6 +96,22 @@ LSP runs only for programming files: `.rs` (rust-analyzer), `.c` `.h` `.cpp`
 (typescript-language-server). Servers are started on demand; if a server binary
 is missing it is silently skipped.
 
+### Windows (splits)
+
+Every window has its own tab strip, line-number gutter, wrap width and scroll
+position. `Ctrl-w` starts a window command:
+
+| Key | Action |
+| --- | --- |
+| `Ctrl-w w`, `Ctrl-w Ctrl-w` | focus the next window |
+| `Ctrl-w c` | close the focused window (fails if its buffer is dirty) |
+| `Ctrl-w s` | split the focused window into top and bottom |
+| `Ctrl-w v` | split the focused window into left and right |
+
+Clicking another window's tab strip or body focuses that window and the mouse
+wheel scrolls the window under the pointer. Only the focused window draws the
+caret, cursor line and fuzzy panel; unfocused tab strips are dimmed.
+
 ## Insert mode
 
 | Key | Action |
@@ -134,16 +150,19 @@ rectangle segment per line, padding short lines.
 | Command | Action |
 | --- | --- |
 | `:w` | write (save) file |
-| `:q` | quit (fails if any buffer is dirty) |
-| `:q!` | quit discarding all changes |
+| `:q` | close the focused window; quit when it is the last one (fails if a buffer is dirty) |
+| `:q!` | same, discarding changes |
 | `:wq` / `:x` | write and quit (fails if another buffer is dirty) |
 | `:wq!` | write, discard other dirty buffers, quit |
-| `:e {path}` | open file (or create a blank buffer) in a new tab |
+| `:e {path}` | open file (or create a blank buffer) as a tab in the focused window |
+| `:split` / `:sp` | split the focused window into left and right |
+| `:vsplit` / `:vs` | split the focused window into left and right |
+| `:hsplit` / `:hs` | split the focused window into top and bottom |
 | `:590` | jump to line 590 |
 | `:bn` / `:bnext` | next buffer |
 | `:bp` / `:bprev` | previous buffer |
 | `:c` | close current buffer |
-| `:c 4` | close buffer 4 |
+| `:c 4` | close tab 4 of the focused window |
 | `:c!` | close, discarding changes |
 | `:pwd` | show current directory |
 | `:pwd {path}` | change directory |

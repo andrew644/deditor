@@ -194,10 +194,26 @@ pub fn measure_cell(fonts: &mut FontSystem, family: Family<'_>, size: f32) -> f3
         .max(1.0)
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct WinRect {
+    pub win: usize,
+    pub x: u32,
+    pub y: u32,
+    pub cols: u32,
+    pub height: u32,
+    pub gutter: u32,
+}
+
+impl WinRect {
+    pub fn body_rows(&self) -> u32 {
+        self.height.saturating_sub(1)
+    }
+}
+
 pub struct Layout {
     pub cols: u32,
     pub rows: u32,
-    pub gutter_cols: u32,
+    pub wins: Vec<WinRect>,
 }
 
 pub fn tab_label(i: usize, b: &crate::buffer::Buffer) -> String {
@@ -209,21 +225,42 @@ pub fn tab_label(i: usize, b: &crate::buffer::Buffer) -> String {
     )
 }
 
-pub fn gutter_cols(ed: &crate::app::Editor) -> u32 {
-    if ed.config.line_numbers {
-        (ed.buf().rope.len_lines().max(1).to_string().len() as u32) + 2
+pub fn gutter_for(b: &crate::buffer::Buffer, line_numbers: bool) -> u32 {
+    if line_numbers {
+        (b.rope.len_lines().max(1).to_string().len() as u32) + 2
     } else {
         0
     }
 }
 
-pub fn tab_hit_ranges(ed: &crate::app::Editor, cw: f32) -> Vec<(f32, f32)> {
+pub struct TabHit {
+    pub x0: f32,
+    pub x1: f32,
+    pub y0: f32,
+    pub y1: f32,
+    pub win: usize,
+    pub tab: usize,
+}
+
+pub fn tab_hit_ranges(ed: &crate::app::Editor, l: &Layout, cw: f32, ch: f32) -> Vec<TabHit> {
     let mut out = Vec::new();
-    let mut x = 0.0f32;
-    for (i, b) in ed.buffers.iter().enumerate() {
-        let wid = tab_label(i, b).chars().count() as f32 * cw;
-        out.push((x, x + wid));
-        x += wid;
+    for wr in &l.wins {
+        let Some(win) = ed.windows.get(wr.win) else {
+            continue;
+        };
+        let mut x = wr.x as f32 * cw;
+        for (tab, &bi) in win.tabs.iter().enumerate() {
+            let wid = tab_label(tab, &ed.buffers[bi]).chars().count() as f32 * cw;
+            out.push(TabHit {
+                x0: x,
+                x1: x + wid,
+                y0: wr.y as f32 * ch,
+                y1: wr.y as f32 * ch + ch,
+                win: wr.win,
+                tab,
+            });
+            x += wid;
+        }
     }
     out
 }
@@ -234,13 +271,44 @@ impl Layout {
         let ch = ts.cell_h.max(1.0);
         let cols = (gpu.config.width as f32 / cw) as u32;
         let total = (gpu.config.height as f32 / ch) as u32;
-        let rows = total.saturating_sub(2);
-        let gutter_cols = gutter_cols(ed);
-        Self {
-            cols,
-            rows,
-            gutter_cols,
-        }
+        let mut cells = Vec::new();
+        ed.tree.rects(
+            crate::window::Rect {
+                x: 0,
+                y: 0,
+                cols,
+                rows: total.saturating_sub(1),
+            },
+            &mut cells,
+        );
+        let wins: Vec<WinRect> = cells
+            .into_iter()
+            .filter_map(|(win, r)| {
+                let w = ed.windows.get(win)?;
+                let gutter = gutter_for(&ed.buffers[w.cur_buf()], ed.config.line_numbers);
+                Some(WinRect {
+                    win,
+                    x: r.x,
+                    y: r.y,
+                    cols: r.cols,
+                    height: r.rows,
+                    gutter,
+                })
+            })
+            .collect();
+        let focus = wins
+            .iter()
+            .find(|w| w.win == ed.active_win)
+            .or_else(|| wins.first());
+        let rows = match focus {
+            Some(w) => w.body_rows(),
+            None => total.saturating_sub(2),
+        };
+        Self { cols, rows, wins }
+    }
+
+    pub fn focus(&self, ed: &crate::app::Editor) -> Option<&WinRect> {
+        self.wins.iter().find(|w| w.win == ed.active_win)
     }
 }
 
@@ -258,10 +326,6 @@ pub fn draw_content(
     let w = gpu.config.width as f32;
     let h = gpu.config.height as f32;
     let theme = &ed.theme;
-    let buf = ed.buf();
-    let wrap = ed.wrap();
-    let rows = wrap.screen_rows(&buf.rope, buf.view_top, buf.view_sub, l.rows as usize);
-    let gutter = l.gutter_cols as usize;
     let mut rects: Vec<rects::RectInstance> = Vec::new();
     let mut overlay: Vec<rects::RectInstance> = Vec::new();
     rects.push(rects::RectInstance {
@@ -271,21 +335,272 @@ pub fn draw_content(
         h,
         color: theme.bg,
     });
-    let mut tab_text = String::new();
-    for (i, b) in ed.buffers.iter().enumerate() {
-        let label = tab_label(i, b);
-        let start = tab_text.chars().count() as f32 * cw;
-        tab_text.push_str(&label);
-        rects.push(rects::RectInstance {
-            x: start,
-            y: 0.0,
-            w: label.chars().count() as f32 * cw,
-            h: ch,
-            color: if i == ed.active {
-                theme.tab_active
-            } else {
-                theme.tab_inactive
-            },
+    struct Strip {
+        tabs: String,
+        gutter: String,
+        body: String,
+        x: f32,
+        y: f32,
+        bw: f32,
+        bh: f32,
+        gutter_cols: u32,
+        focused: bool,
+    }
+    let mut strips: Vec<Strip> = Vec::new();
+    for wr in &l.wins {
+        let Some(win) = ed.windows.get(wr.win) else {
+            continue;
+        };
+        let focused = wr.win == ed.active_win;
+        let buf = &ed.buffers[win.cur_buf()];
+        let ox = wr.x as f32 * cw;
+        let oy = wr.y as f32 * ch;
+        let wy = oy + ch;
+        let wc = wr.cols as f32 * cw;
+        let gutter = wr.gutter as usize;
+        let wrap = ed.wrap_with((wr.cols as usize).saturating_sub(wr.gutter as usize).max(1));
+        let rows = wrap.screen_rows(
+            &buf.rope,
+            buf.view_top,
+            buf.view_sub,
+            wr.body_rows() as usize,
+        );
+        let mut tab_text = String::new();
+        for (i, &bi) in win.tabs.iter().enumerate() {
+            let label = tab_label(i, &ed.buffers[bi]);
+            let start = ox + tab_text.chars().count() as f32 * cw;
+            tab_text.push_str(&label);
+            rects.push(rects::RectInstance {
+                x: start,
+                y: oy,
+                w: label.chars().count() as f32 * cw,
+                h: ch,
+                color: if !focused {
+                    theme.status_bg
+                } else if bi == win.cur_buf() {
+                    theme.tab_active
+                } else {
+                    theme.tab_inactive
+                },
+            });
+        }
+        let cursor_row = wrap.screen_row(&buf.rope, buf.view_top, buf.view_sub, buf.cursor);
+        if focused
+            && let Some(row) = cursor_row
+            && row < rows.len()
+        {
+            rects.push(rects::RectInstance {
+                x: ox,
+                y: wy + row as f32 * ch,
+                w: wc,
+                h: ch,
+                color: theme.cursorline,
+            });
+        }
+        let hi_term: Option<String> = match ed.cmd_kind {
+            Some(crate::mode::CmdKind::Search) | Some(crate::mode::CmdKind::SearchBack) => {
+                if ed.cmdline.is_empty() {
+                    None
+                } else {
+                    Some(ed.cmdline.clone())
+                }
+            }
+            _ => ed.search.clone(),
+        };
+        if let Some(term) = hi_term {
+            let t: Vec<char> = term.chars().collect();
+            let fold = crate::search::ignore_case(&term);
+            if !t.is_empty() {
+                for (r, scr) in rows.iter().enumerate() {
+                    if scr.line >= buf.rope.len_lines() || scr.start >= scr.end {
+                        continue;
+                    }
+                    let raw = crate::buffer::line_text(&buf.rope, scr.line);
+                    let chars: Vec<char> = raw.chars().collect();
+                    for i in scr.start..scr.end {
+                        if i + t.len() > chars.len() {
+                            break;
+                        }
+                        if !crate::search::matches_at(&chars, &t, i, fold) {
+                            continue;
+                        }
+                        rects.push(rects::RectInstance {
+                            x: ox + (gutter + wrap.pos(&raw, i).1) as f32 * cw,
+                            y: wy + r as f32 * ch,
+                            w: t.len().min(scr.end - i) as f32 * cw,
+                            h: ch,
+                            color: theme.warn,
+                        });
+                    }
+                }
+            }
+        }
+        if focused && ed.config.spellcheck {
+            for (r, scr) in rows.iter().enumerate() {
+                if scr.line >= buf.rope.len_lines() || scr.start >= scr.end {
+                    continue;
+                }
+                let raw = crate::buffer::line_text(&buf.rope, scr.line);
+                let Some((_, spans)) = ed.spell.spans.get(&scr.line) else {
+                    continue;
+                };
+                for (col, len) in spans.iter().copied() {
+                    if col < scr.start || col >= scr.end {
+                        continue;
+                    }
+                    rects.push(rects::RectInstance {
+                        x: ox + (gutter + wrap.pos(&raw, col).1) as f32 * cw,
+                        y: wy + r as f32 * ch + ch - 2.0,
+                        w: len.min(scr.end - col) as f32 * cw,
+                        h: 2.0,
+                        color: theme.error,
+                    });
+                }
+            }
+        }
+        if focused
+            && ed.mode == crate::mode::Mode::Visual
+            && let Some((r0, r1, c0, c1)) = ed.visual_block.then_some(ed.block_range()).flatten()
+        {
+            for (r, scr) in rows.iter().enumerate() {
+                if scr.line < r0 || scr.line > r1 || scr.line >= buf.rope.len_lines() {
+                    continue;
+                }
+                let raw = crate::buffer::line_text(&buf.rope, scr.line);
+                let len = raw.chars().count();
+                let lx = (gutter + wrap.pos(&raw, c0.min(len)).1) as f32 * cw;
+                let mut width = (gutter + wrap.pos(&raw, (c1 + 1).min(len)).1) as f32 * cw - lx;
+                if c1 + 1 > len {
+                    width += (c1 + 1 - len) as f32 * cw;
+                }
+                if width <= 0.0 {
+                    continue;
+                }
+                rects.push(rects::RectInstance {
+                    x: ox + lx,
+                    y: wy + r as f32 * ch,
+                    w: width,
+                    h: ch,
+                    color: theme.selection,
+                });
+            }
+        }
+        if focused && ed.mode == crate::mode::Mode::Visual && !ed.visual_block {
+            let ((sa, sb), lw) = ed.sel_range();
+            for (r, scr) in rows.iter().enumerate() {
+                let line = scr.line;
+                if line >= buf.rope.len_lines() || scr.start >= scr.end {
+                    continue;
+                }
+                let raw = crate::buffer::line_text(&buf.rope, line);
+                let (from, to) = match sel_row_span(sa, sb, lw, line) {
+                    Some(f) => f,
+                    None => continue,
+                };
+                let from = from.unwrap_or(scr.start);
+                let a = from.max(scr.start);
+                if a >= scr.end {
+                    continue;
+                }
+                let lx = (gutter + wrap.pos(&raw, a).1) as f32 * cw;
+                let width = if to == usize::MAX {
+                    wc - lx
+                } else {
+                    let b = to.min(scr.end).max(a + 1);
+                    (gutter + wrap.pos(&raw, b).1) as f32 * cw - lx
+                };
+                if width <= 0.0 {
+                    continue;
+                }
+                rects.push(rects::RectInstance {
+                    x: ox + lx,
+                    y: wy + r as f32 * ch,
+                    w: width,
+                    h: ch,
+                    color: theme.selection,
+                });
+            }
+        }
+        let cur_line = crate::buffer::line_text(&buf.rope, buf.cursor.line);
+        let cur_x = ox + (gutter + wrap.pos(&cur_line, buf.cursor.col).1) as f32 * cw;
+        if focused
+            && ed.cmd_kind.is_none()
+            && let Some(row) = cursor_row
+            && row < rows.len()
+        {
+            rects.push(rects::RectInstance {
+                x: cur_x,
+                y: wy + row as f32 * ch,
+                w: if ed.mode == crate::mode::Mode::Insert {
+                    2.0
+                } else {
+                    cw
+                },
+                h: ch,
+                color: theme.accent,
+            });
+        }
+
+        let mut gutter_s = String::new();
+        let mut body_s = String::new();
+        for (r, row) in rows.iter().enumerate() {
+            if row.line < buf.rope.len_lines() {
+                if wr.gutter > 0 {
+                    if row.first() {
+                        gutter_s.push_str(&format!(
+                            "{:>w$} ",
+                            row.line + 1,
+                            w = gutter.saturating_sub(1)
+                        ));
+                    } else {
+                        gutter_s.push_str(&" ".repeat(gutter));
+                    }
+                }
+                let raw = crate::buffer::line_text(&buf.rope, row.line);
+                body_s.push_str(&wrap.text(&raw, row.start, row.end, ed.config.show_whitespace));
+            }
+            if r + 1 < rows.len() {
+                gutter_s.push('\n');
+                body_s.push('\n');
+            }
+        }
+        for d in ed.lsp.diags_for(buf.path.as_ref()) {
+            let Some(row) = wrap.screen_row(
+                &buf.rope,
+                buf.view_top,
+                buf.view_sub,
+                crate::buffer::Pos {
+                    line: d.line,
+                    col: 0,
+                },
+            ) else {
+                continue;
+            };
+            if row >= rows.len() {
+                continue;
+            }
+            rects.push(rects::RectInstance {
+                x: ox,
+                y: wy + row as f32 * ch,
+                w: 4.0f32.max(cw * 0.35),
+                h: ch,
+                color: if d.severity == crate::lsp::SEV_WARN {
+                    theme.warn
+                } else {
+                    theme.error
+                },
+            });
+        }
+        strips.push(Strip {
+            tabs: tab_text,
+            gutter: gutter_s,
+            body: body_s,
+            x: ox,
+            y: oy,
+            bw: wc,
+            bh: wr.body_rows() as f32 * ch,
+            gutter_cols: wr.gutter,
+            focused,
         });
     }
     rects.push(rects::RectInstance {
@@ -295,160 +610,6 @@ pub fn draw_content(
         h: ch,
         color: theme.status_bg,
     });
-    let cursor_row = wrap.screen_row(&buf.rope, buf.view_top, buf.view_sub, buf.cursor);
-    if let Some(row) = cursor_row
-        && row < rows.len()
-    {
-        rects.push(rects::RectInstance {
-            x: 0.0,
-            y: (1 + row) as f32 * ch,
-            w,
-            h: ch,
-            color: theme.cursorline,
-        });
-    }
-    let hi_term: Option<String> = match ed.cmd_kind {
-        Some(crate::mode::CmdKind::Search) | Some(crate::mode::CmdKind::SearchBack) => {
-            if ed.cmdline.is_empty() {
-                None
-            } else {
-                Some(ed.cmdline.clone())
-            }
-        }
-        _ => ed.search.clone(),
-    };
-    if let Some(term) = hi_term {
-        let t: Vec<char> = term.chars().collect();
-        let fold = crate::search::ignore_case(&term);
-        if !t.is_empty() {
-            for (r, scr) in rows.iter().enumerate() {
-                if scr.line >= buf.rope.len_lines() || scr.start >= scr.end {
-                    continue;
-                }
-                let raw = crate::buffer::line_text(&buf.rope, scr.line);
-                let chars: Vec<char> = raw.chars().collect();
-                for i in scr.start..scr.end {
-                    if i + t.len() > chars.len() {
-                        break;
-                    }
-                    if !crate::search::matches_at(&chars, &t, i, fold) {
-                        continue;
-                    }
-                    rects.push(rects::RectInstance {
-                        x: (gutter + wrap.pos(&raw, i).1) as f32 * cw,
-                        y: (1 + r) as f32 * ch,
-                        w: t.len().min(scr.end - i) as f32 * cw,
-                        h: ch,
-                        color: theme.warn,
-                    });
-                }
-            }
-        }
-    }
-    if ed.config.spellcheck {
-        for (r, scr) in rows.iter().enumerate() {
-            if scr.line >= buf.rope.len_lines() || scr.start >= scr.end {
-                continue;
-            }
-            let raw = crate::buffer::line_text(&buf.rope, scr.line);
-            let Some((_, spans)) = ed.spell.spans.get(&scr.line) else {
-                continue;
-            };
-            for (col, len) in spans.iter().copied() {
-                if col < scr.start || col >= scr.end {
-                    continue;
-                }
-                rects.push(rects::RectInstance {
-                    x: (gutter + wrap.pos(&raw, col).1) as f32 * cw,
-                    y: (1 + r) as f32 * ch + ch - 2.0,
-                    w: len.min(scr.end - col) as f32 * cw,
-                    h: 2.0,
-                    color: theme.error,
-                });
-            }
-        }
-    }
-    if ed.mode == crate::mode::Mode::Visual
-        && let Some((r0, r1, c0, c1)) = ed.visual_block.then_some(ed.block_range()).flatten()
-    {
-        for (r, scr) in rows.iter().enumerate() {
-            if scr.line < r0 || scr.line > r1 || scr.line >= buf.rope.len_lines() {
-                continue;
-            }
-            let raw = crate::buffer::line_text(&buf.rope, scr.line);
-            let len = raw.chars().count();
-            let x = (gutter + wrap.pos(&raw, c0.min(len)).1) as f32 * cw;
-            let mut width = (gutter + wrap.pos(&raw, (c1 + 1).min(len)).1) as f32 * cw - x;
-            if c1 + 1 > len {
-                width += (c1 + 1 - len) as f32 * cw;
-            }
-            if width <= 0.0 {
-                continue;
-            }
-            rects.push(rects::RectInstance {
-                x,
-                y: (1 + r) as f32 * ch,
-                w: width,
-                h: ch,
-                color: theme.selection,
-            });
-        }
-    }
-    if ed.mode == crate::mode::Mode::Visual && !ed.visual_block {
-        let ((sa, sb), lw) = ed.sel_range();
-        for (r, scr) in rows.iter().enumerate() {
-            let line = scr.line;
-            if line >= buf.rope.len_lines() || scr.start >= scr.end {
-                continue;
-            }
-            let raw = crate::buffer::line_text(&buf.rope, line);
-            let (from, to) = match sel_row_span(sa, sb, lw, line) {
-                Some(f) => f,
-                None => continue,
-            };
-            let from = from.unwrap_or(scr.start);
-            let a = from.max(scr.start);
-            if a >= scr.end {
-                continue;
-            }
-            let x = (gutter + wrap.pos(&raw, a).1) as f32 * cw;
-            let width = if to == usize::MAX {
-                w - x
-            } else {
-                let b = to.min(scr.end).max(a + 1);
-                (gutter + wrap.pos(&raw, b).1) as f32 * cw - x
-            };
-            if width <= 0.0 {
-                continue;
-            }
-            rects.push(rects::RectInstance {
-                x,
-                y: (1 + r) as f32 * ch,
-                w: width,
-                h: ch,
-                color: theme.selection,
-            });
-        }
-    }
-    let cur_line = crate::buffer::line_text(&buf.rope, buf.cursor.line);
-    let cur_x = (gutter + wrap.pos(&cur_line, buf.cursor.col).1) as f32 * cw;
-    if ed.cmd_kind.is_none()
-        && let Some(row) = cursor_row
-        && row < rows.len()
-    {
-        rects.push(rects::RectInstance {
-            x: cur_x,
-            y: (1 + row) as f32 * ch,
-            w: if ed.mode == crate::mode::Mode::Insert {
-                2.0
-            } else {
-                cw
-            },
-            h: ch,
-            color: theme.accent,
-        });
-    }
-
     if ed.cmd_kind.is_some() {
         let col = ed.cmdline_col.min(ed.cmdline.chars().count());
         rects.push(rects::RectInstance {
@@ -459,30 +620,54 @@ pub fn draw_content(
             color: theme.accent,
         });
     }
-
-    let mut gutter_s = String::new();
-    let mut body_s = String::new();
-    for (r, row) in rows.iter().enumerate() {
-        if row.line < buf.rope.len_lines() {
-            if l.gutter_cols > 0 {
-                if row.first() {
-                    gutter_s.push_str(&format!(
-                        "{:>w$} ",
-                        row.line + 1,
-                        w = gutter.saturating_sub(1)
-                    ));
-                } else {
-                    gutter_s.push_str(&" ".repeat(gutter));
-                }
-            }
-            let raw = crate::buffer::line_text(&buf.rope, row.line);
-            body_s.push_str(&wrap.text(&raw, row.start, row.end, ed.config.show_whitespace));
+    for (i, wr) in l.wins.iter().enumerate() {
+        if i + 1 >= l.wins.len() {
+            continue;
         }
-        if r + 1 < rows.len() {
-            gutter_s.push('\n');
-            body_s.push('\n');
-        }
+        let next = &l.wins[i + 1];
+        let (sx, sy, sw, sh) = if wr.y == next.y {
+            (
+                next.x as f32 * cw,
+                wr.y as f32 * ch,
+                1.0f32.max(cw * 0.15),
+                wr.height.max(next.height) as f32 * ch,
+            )
+        } else {
+            (
+                wr.x.min(next.x) as f32 * cw,
+                next.y as f32 * ch,
+                (wr.cols.max(next.cols)) as f32 * cw,
+                1.0f32.max(ch * 0.15),
+            )
+        };
+        rects.push(rects::RectInstance {
+            x: sx,
+            y: sy,
+            w: sw,
+            h: sh,
+            color: theme.status_bg,
+        });
     }
+    let fallback = WinRect {
+        win: ed.active_win,
+        x: 0,
+        y: 0,
+        cols: l.cols,
+        height: l.rows.saturating_add(1),
+        gutter: 0,
+    };
+    let f = l.focus(ed).unwrap_or(&fallback);
+    let ox = f.x as f32 * cw;
+    let oy = f.y as f32 * ch;
+    let wy = oy + ch;
+    let wc = f.cols as f32 * cw;
+    let wh = f.height as f32 * ch;
+    let gutter = f.gutter as usize;
+    let buf = ed.buf();
+    let wrap = ed.wrap();
+    let cursor_row = wrap.screen_row(&buf.rope, buf.view_top, buf.view_sub, buf.cursor);
+    let cur_line = crate::buffer::line_text(&buf.rope, buf.cursor.line);
+    let cur_x = ox + (gutter + wrap.pos(&cur_line, buf.cursor.col).1) as f32 * cw;
     let diags = ed.lsp.diags_for(buf.path.as_ref());
     let cursor_diag = diags.iter().find(|d| d.line == buf.cursor.line).map(|d| {
         let tag = if d.severity == crate::lsp::SEV_WARN {
@@ -543,36 +728,8 @@ pub fn draw_content(
     } else {
         theme.fg
     };
-    for d in diags {
-        let Some(row) = wrap.screen_row(
-            &buf.rope,
-            buf.view_top,
-            buf.view_sub,
-            crate::buffer::Pos {
-                line: d.line,
-                col: 0,
-            },
-        ) else {
-            continue;
-        };
-        if row >= rows.len() {
-            continue;
-        }
-        let y = (1 + row) as f32 * ch;
-        rects.push(rects::RectInstance {
-            x: 0.0,
-            y,
-            w: 4.0f32.max(cw * 0.35),
-            h: ch,
-            color: if d.severity == crate::lsp::SEV_WARN {
-                theme.warn
-            } else {
-                theme.error
-            },
-        });
-    }
 
-    let hover_cols = ((w / cw) as usize).min(80);
+    let hover_cols = ((wc / cw) as usize).min(80);
     let hover_s = ed
         .lsp
         .hover
@@ -590,8 +747,8 @@ pub fn draw_content(
         let nrows = hover_s.lines().count() as f32;
         let row = 1.0 + cursor_row.unwrap_or(0) as f32;
         let hw = hover_cols as f32 * cw;
-        let hx = (l.gutter_cols as f32 * cw + 10.0 * cw).min(w - hw);
-        let hy = (row * ch + ch).min(h - (nrows + 1.0) * ch);
+        let hx = (ox + gutter as f32 * cw + 10.0 * cw).min(ox + wc - hw);
+        let hy = (oy + row * ch + ch).min(oy + wh - (nrows + 1.0) * ch);
         hover_pos = Some((hx, hy));
         overlay.push(rects::RectInstance {
             x: hx,
@@ -615,8 +772,9 @@ pub fn draw_content(
             .unwrap_or(1);
         let mrows = menu_lines.len() as f32;
         let mw = mcols as f32 * cw;
-        let mx = cur_x.min(w - mw);
-        let my = ((cursor_row.unwrap_or(0) as f32 + 2.0) * ch).min(h - (mrows + 1.0) * ch);
+        let mx = cur_x.min(ox + wc - mw);
+        let my =
+            (oy + (cursor_row.unwrap_or(0) as f32 + 2.0) * ch).min(oy + wh - (mrows + 1.0) * ch);
         menu_pos = Some((mx, my));
         overlay.push(rects::RectInstance {
             x: mx,
@@ -664,8 +822,8 @@ pub fn draw_content(
                 )
                 .unwrap_or(0) as f32;
         let cwid = 42.0f32 * cw;
-        let cx = ((l.gutter_cols as f32 + cs.col as f32) * cw).min(w - cwid);
-        let cy = ((row + 1.0) * ch).min(h - nrows * ch);
+        let cx = (ox + (gutter as f32 + cs.col as f32) * cw).min(ox + wc - cwid);
+        let cy = (oy + (row + 1.0) * ch).min(oy + wh - nrows * ch);
         comp_pos = Some((cx, cy, nrows));
         overlay.push(rects::RectInstance {
             x: cx,
@@ -699,7 +857,7 @@ pub fn draw_content(
             .panel_cursor
             .saturating_sub(start)
             .min(shown.saturating_sub(1));
-        let box_cols = (l.cols as f32 * 0.5).max(40.0).min(l.cols as f32) as usize;
+        let box_cols = (f.cols as f32 * 0.5).max(40.0).min(f.cols as f32) as usize;
         let pw = box_cols as f32 * cw;
         popup_s.push_str(&pad_line(&ed.panel_query, box_cols));
         for (row, &idx) in ed.panel_order.iter().skip(start).take(max_rows).enumerate() {
@@ -714,16 +872,16 @@ pub fn draw_content(
             ));
         }
         overlay.push(rects::RectInstance {
-            x: 0.0,
-            y: ch,
+            x: ox,
+            y: wy,
             w: pw,
             h: (1 + shown) as f32 * ch,
             color: theme.popup_bg,
         });
         if !ed.panel_order.is_empty() {
             overlay.push(rects::RectInstance {
-                x: 0.0,
-                y: (2 + sel_row) as f32 * ch,
+                x: ox,
+                y: wy + (1 + sel_row) as f32 * ch,
                 w: pw,
                 h: ch,
                 color: theme.popup_sel,
@@ -776,9 +934,6 @@ pub fn draw_content(
         });
     }
 
-    let mut tb_tab = mkbuf(ts, &tab_text, w, h);
-    let mut tb_gutter = mkbuf(ts, &gutter_s, w, h);
-    let mut tb_body = mkbuf(ts, &body_s, w, h);
     let mut tb_msg = mkbuf(ts, &left_s, w, h);
     let mut tb_ruler = mkbuf(ts, &right_s, w, h);
     let mut tb_popup = mkbuf(ts, &popup_s, w, h);
@@ -787,13 +942,35 @@ pub fn draw_content(
     let mut tb_menu = mkbuf(ts, &menu_s, w, h);
     let mut tb_cpl = mkbuf(ts, &cpl_s, w, h);
 
-    let areas: Vec<(&mut Buffer, f32, f32, u32)> = vec![
-        (&mut tb_tab as &mut Buffer, 0.0f32, 0.0f32, theme.fg),
-        (&mut tb_gutter, 0.0, ch, theme.gutter_fg),
-        (&mut tb_body, l.gutter_cols as f32 * cw, ch, theme.fg),
-        (&mut tb_msg, 0.0, h - ch, left_color),
-        (&mut tb_ruler, right_x as f32 * cw, h - ch, theme.fg),
-    ];
+    let mut strip_bufs: Vec<[Buffer; 3]> = strips
+        .iter()
+        .map(|s| {
+            [
+                mkbuf(ts, &s.tabs, s.bw.max(1.0), ch),
+                mkbuf(ts, &s.gutter, s.bw.max(1.0), s.bh.max(1.0)),
+                mkbuf(
+                    ts,
+                    &s.body,
+                    (s.bw - s.gutter_cols as f32 * cw).max(1.0),
+                    s.bh.max(1.0),
+                ),
+            ]
+        })
+        .collect();
+    let mut areas: Vec<(&mut Buffer, f32, f32, u32)> = Vec::new();
+    for (s, bs) in strips.iter().zip(strip_bufs.iter_mut()) {
+        let [tab, gutter_b, body] = bs;
+        areas.push((
+            tab,
+            s.x,
+            s.y,
+            if s.focused { theme.fg } else { theme.gutter_fg },
+        ));
+        areas.push((gutter_b, s.x, s.y + ch, theme.gutter_fg));
+        areas.push((body, s.x + s.gutter_cols as f32 * cw, s.y + ch, theme.fg));
+    }
+    areas.push((&mut tb_msg, 0.0, h - ch, left_color));
+    areas.push((&mut tb_ruler, right_x as f32 * cw, h - ch, theme.fg));
     let mut oareas: Vec<(&mut Buffer, f32, f32, u32)> = Vec::new();
     if popup_open {
         oareas.push((&mut tb_popup, cw, ch, theme.popup_fg));
@@ -950,6 +1127,7 @@ fn pending_label(ed: &crate::app::Editor) -> String {
         Pending::Op(op) => s.push_str(op_letter(op)),
         Pending::G => s.push('g'),
         Pending::Z => s.push('z'),
+        Pending::WinCmd => s.push('^'),
         Pending::F { forward, to } => {
             s.push(match (forward, to) {
                 (true, true) => 'f',
@@ -1055,6 +1233,45 @@ mod tests {
         assert_eq!(elide_path("src/mod.rs", 20), "src/mod.rs");
         assert_eq!(elide_path("src/lsp/client.rs", 10), "…client.rs");
         assert_eq!(elide_path("deep/nested/path/file.txt", 1), "…");
+    }
+
+    #[test]
+    fn tab_hit_ranges_are_offset_per_window() {
+        let mut ed = crate::app::Editor::test_new();
+        ed.windows.push(crate::window::Window::new(vec![0]));
+        let layout = Layout {
+            cols: 80,
+            rows: 24,
+            wins: vec![
+                WinRect {
+                    win: 0,
+                    x: 0,
+                    y: 0,
+                    cols: 40,
+                    height: 24,
+                    gutter: 2,
+                },
+                WinRect {
+                    win: 1,
+                    x: 40,
+                    y: 0,
+                    cols: 40,
+                    height: 24,
+                    gutter: 2,
+                },
+            ],
+        };
+        let label_w = tab_label(0, &ed.buffers[0]).chars().count() as f32 * 10.0;
+        let hits = tab_hit_ranges(&ed, &layout, 10.0, 20.0);
+        assert_eq!(hits.len(), 2);
+        assert_eq!((hits[0].win, hits[0].tab), (0, 0));
+        assert_eq!(
+            (hits[0].x0, hits[0].x1, hits[0].y0, hits[0].y1),
+            (0.0, label_w, 0.0, 20.0)
+        );
+        assert_eq!((hits[1].win, hits[1].tab), (1, 0));
+        assert_eq!((hits[1].x0, hits[1].y0, hits[1].y1), (400.0, 0.0, 20.0));
+        assert_eq!(hits[1].x1, 400.0 + label_w);
     }
 
     #[test]

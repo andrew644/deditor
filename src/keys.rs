@@ -196,6 +196,14 @@ fn normal_key(ed: &mut Editor, key: &Key, mods: ModifiersState) {
                 };
                 ed.enter_insert();
             }
+            Some("w") => {
+                if ed.pending == Pending::WinCmd {
+                    ed.pending = Pending::None;
+                    ed.focus_next();
+                } else {
+                    ed.pending = Pending::WinCmd;
+                }
+            }
             _ => {}
         }
         ed.count = 0;
@@ -259,10 +267,24 @@ fn normal_key(ed: &mut Editor, key: &Key, mods: ModifiersState) {
             ed.count = 0;
             return;
         }
+        Pending::WinCmd => {
+            ed.pending = Pending::None;
+            ed.count = 0;
+            match k {
+                Some("w") | Some("W") => {
+                    ed.focus_next();
+                }
+                Some("c") | Some("q") => ed.close_window_cmd(),
+                Some("s") => ed.split(crate::window::Axis::Rows),
+                Some("v") => ed.split(crate::window::Axis::Columns),
+                _ => {}
+            }
+            return;
+        }
         Pending::Z => {
             ed.pending = Pending::None;
             if matches!(k, Some("z")) {
-                let rows = ed.view_rows;
+                let rows = ed.rows();
                 ed.center_cursor(rows);
             }
             ed.count = 0;
@@ -936,7 +958,7 @@ mod tests {
         ed.config.clipboard = false;
         let body: String = (0..40).map(|i| format!("line {i}\n")).collect();
         ed.buf_mut().insert_text(&body, false);
-        ed.view_rows = 10;
+        ed.win_mut().view_rows = 10;
         ed.buf_mut().cursor = Pos { line: 0, col: 3 };
         type_keys(&mut ed, &[Key::Named(NamedKey::PageDown)]);
         assert_eq!(ed.buf().cursor, Pos { line: 10, col: 3 });
@@ -962,7 +984,7 @@ mod tests {
         let mut ed = Editor::test_new();
         let body: String = (0..40).map(|i| format!("line {i}\n")).collect();
         ed.buf_mut().insert_text(&body, false);
-        ed.view_rows = 10;
+        ed.win_mut().view_rows = 10;
         ed.buf_mut().cursor = Pos { line: 30, col: 2 };
         type_keys(&mut ed, &[Key::Character("z".into())]);
         assert_eq!(ed.pending, Pending::Z);
@@ -990,7 +1012,7 @@ mod tests {
         let mut ed = Editor::test_new();
         let body: String = (0..40).map(|i| format!("line {i}\n")).collect();
         ed.buf_mut().insert_text(&body, false);
-        ed.view_rows = 10;
+        ed.win_mut().view_rows = 10;
         ed.buf_mut().cursor = Pos { line: 30, col: 2 };
         type_keys(
             &mut ed,

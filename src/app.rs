@@ -1,9 +1,12 @@
 use crate::buffer::{Buffer, Pos, line_chars, line_text};
 use crate::config::{Config, RgbTheme};
 use crate::mode::{self, Mode};
+use crate::window::{Axis, Node, Window};
 use std::path::Path;
 
 const SCROLLOFF: usize = 8;
+const MIN_SPLIT_COLS: usize = 20;
+const MIN_SPLIT_ROWS: usize = 5;
 
 static CLIPBOARD: std::sync::Mutex<Option<arboard::Clipboard>> = std::sync::Mutex::new(None);
 
@@ -38,7 +41,9 @@ pub fn clipboard_shutdown() {
 
 pub struct Editor {
     pub buffers: Vec<Buffer>,
-    pub active: usize,
+    pub windows: Vec<Window>,
+    pub tree: Node,
+    pub active_win: usize,
     pub mode: Mode,
     pub status: Option<String>,
     pub status_err: bool,
@@ -55,8 +60,6 @@ pub struct Editor {
     pub visual_block: bool,
     pub coalesce_open: bool,
     pub last_find: Option<(mode::FindDir, char)>,
-    pub view_rows: usize,
-    pub view_cols: usize,
     pub prefer_x: Option<usize>,
     pub cmdline: String,
     pub cmdline_col: usize,
@@ -96,6 +99,7 @@ pub enum Cmd {
     Pwd(Option<String>),
     Replace(String, String),
     Close(Option<usize>, bool),
+    Split(crate::window::Axis),
 }
 
 pub fn parse_cmd(s: &str) -> Result<Cmd, String> {
@@ -112,6 +116,8 @@ pub fn parse_cmd(s: &str) -> Result<Cmd, String> {
         ("q", "") => Ok(Cmd::Quit(bang)),
         ("bnext" | "bn", "") => Ok(Cmd::BNext),
         ("bprev" | "bp", "") => Ok(Cmd::BPrev),
+        ("split" | "sp" | "vsplit" | "vs", "") => Ok(Cmd::Split(crate::window::Axis::Columns)),
+        ("hsplit" | "hs", "") => Ok(Cmd::Split(crate::window::Axis::Rows)),
         ("c", "") => Ok(Cmd::Close(None, bang)),
         ("c", a) => match a.parse::<usize>() {
             Ok(n) if n > 0 => Ok(Cmd::Close(Some(n), bang)),
@@ -142,7 +148,9 @@ impl Editor {
         warnings.extend(twarnings);
         let mut ed = Self {
             buffers: vec![Buffer::empty()],
-            active: 0,
+            windows: vec![Window::new(vec![0])],
+            tree: Node::Leaf(0),
+            active_win: 0,
             mode: Mode::Normal,
             status: None,
             status_err: false,
@@ -159,8 +167,6 @@ impl Editor {
             visual_block: false,
             coalesce_open: false,
             last_find: None,
-            view_rows: 24,
-            view_cols: 80,
             prefer_x: None,
             cmdline: String::new(),
             cmdline_col: 0,
@@ -209,11 +215,158 @@ impl Editor {
     }
 
     pub fn buf(&self) -> &Buffer {
-        &self.buffers[self.active]
+        &self.buffers[self.active()]
     }
 
     pub fn buf_mut(&mut self) -> &mut Buffer {
-        &mut self.buffers[self.active]
+        let i = self.windows[self.active_win].cur_buf();
+        &mut self.buffers[i]
+    }
+
+    pub fn active(&self) -> usize {
+        self.windows[self.active_win].cur_buf()
+    }
+
+    pub fn win(&self) -> &Window {
+        &self.windows[self.active_win]
+    }
+
+    pub fn win_mut(&mut self) -> &mut Window {
+        &mut self.windows[self.active_win]
+    }
+
+    pub fn rows(&self) -> usize {
+        self.windows[self.active_win].view_rows
+    }
+
+    pub fn cols(&self) -> usize {
+        self.windows[self.active_win].view_cols
+    }
+
+    pub fn win_ids(&self) -> Vec<usize> {
+        let mut out = Vec::new();
+        self.tree.leaves(&mut out);
+        out
+    }
+
+    pub fn split(&mut self, axis: Axis) {
+        let (room, min) = match axis {
+            Axis::Columns => (self.win().view_cols, MIN_SPLIT_COLS),
+            Axis::Rows => (self.win().view_rows, MIN_SPLIT_ROWS),
+        };
+        if room < min {
+            self.set_status("E36: Not enough room to split".to_string(), true);
+            return;
+        }
+        let id = self.windows.len();
+        let mut w = Window::new(self.win().tabs.clone());
+        w.cur = self.win().cur;
+        self.tree.split_leaf(self.active_win, axis, id);
+        self.windows.push(w);
+        self.active_win = id;
+        self.set_status(
+            format!("[Window {} of {}]", id + 1, self.windows.len()),
+            false,
+        );
+    }
+
+    pub fn focus_next(&mut self) -> bool {
+        let ids = self.win_ids();
+        if ids.len() < 2 {
+            return false;
+        }
+        let pos = ids.iter().position(|i| *i == self.active_win).unwrap_or(0);
+        let next = ids[(pos + 1) % ids.len()];
+        let prev = self.active();
+        self.active_win = next;
+        if self.active() != prev {
+            self.reset_buffer_state();
+            self.ensure_lsp();
+        }
+        true
+    }
+
+    pub fn close_window(&mut self) -> bool {
+        if self.windows.len() < 2 {
+            return false;
+        }
+        let dead = self.active_win;
+        let ids = self.win_ids();
+        let next = ids
+            .iter()
+            .copied()
+            .find(|i| *i > dead)
+            .or_else(|| ids.iter().copied().find(|i| *i < dead))
+            .unwrap();
+        self.tree.remove_leaf(dead);
+        self.tree.drop_id(dead);
+        self.windows.remove(dead);
+        self.active_win = if next > dead { next - 1 } else { next };
+        self.reset_buffer_state();
+        self.ensure_lsp();
+        true
+    }
+
+    pub fn close_window_cmd(&mut self) {
+        if self.windows.len() < 2 {
+            self.set_status("E444: Cannot close last window".to_string(), true);
+            return;
+        }
+        if self.buf().dirty {
+            self.set_status(
+                "E37: No write since last change (add ! to override)".to_string(),
+                true,
+            );
+            return;
+        }
+        self.close_window();
+    }
+
+    pub fn buffers_removed(&mut self, removed: usize) {
+        for w in self.windows.iter_mut() {
+            w.tabs = w
+                .tabs
+                .iter()
+                .filter_map(|b| {
+                    if *b == removed {
+                        None
+                    } else {
+                        Some(if *b > removed { *b - 1 } else { *b })
+                    }
+                })
+                .collect();
+            w.cur = w.cur.min(w.tabs.len().saturating_sub(1));
+            if w.tabs.is_empty() {
+                let b = self.buffers.len().saturating_sub(1);
+                if self.buffers.is_empty() {
+                    self.buffers.push(Buffer::empty());
+                }
+                w.tabs.push(b);
+                w.cur = 0;
+            }
+        }
+    }
+
+    pub fn focus_win(&mut self, win: usize) {
+        if win >= self.windows.len() || win == self.active_win {
+            return;
+        }
+        let prev = self.active();
+        self.active_win = win;
+        if self.active() != prev {
+            self.reset_buffer_state();
+            self.ensure_lsp();
+        }
+    }
+
+    pub fn scroll_win_to_cursor(&mut self, win: usize, rows: usize) {
+        if win >= self.windows.len() {
+            return;
+        }
+        let saved = self.active_win;
+        self.active_win = win;
+        self.scroll_to_cursor(rows);
+        self.active_win = saved;
     }
 
     pub fn tab_width(&self) -> usize {
@@ -246,7 +399,11 @@ impl Editor {
     }
 
     pub fn wrap(&self) -> crate::wrap::Wrap {
-        crate::wrap::Wrap::new(self.view_cols, self.config.tab_width as usize)
+        self.wrap_with(self.cols())
+    }
+
+    pub fn wrap_with(&self, cols: usize) -> crate::wrap::Wrap {
+        crate::wrap::Wrap::new(cols, self.config.tab_width as usize)
     }
 
     pub fn scroll_to_cursor(&mut self, rows: usize) {
@@ -353,10 +510,10 @@ impl Editor {
             return;
         }
         self.spell.sync_personal(&self.config.spell_dict);
-        let last = self.buffers[self.active].rope.len_lines().saturating_sub(1);
-        let start = self.buffers[self.active].view_top.min(last);
-        let end = (self.buffers[self.active].view_top + self.view_rows).min(last);
-        let rope = &self.buffers[self.active].rope;
+        let last = self.buf().rope.len_lines().saturating_sub(1);
+        let start = self.buf().view_top.min(last);
+        let end = (self.buf().view_top + self.rows()).min(last);
+        let rope = &self.buf().rope;
         let stale: Vec<(usize, u64, String)> = (start..=end)
             .filter_map(|line| {
                 let raw = crate::buffer::line_text(rope, line);
@@ -870,7 +1027,7 @@ impl Editor {
         let text = crate::buffer::line_text(&b.rope, b.cursor.line);
         let here = wrap.pos(&text, b.cursor.col).1;
         crate::motions::Ctx {
-            rows: self.view_rows,
+            rows: self.rows(),
             wrap,
             prefer_x: if vertical {
                 self.prefer_x.unwrap_or(here)
@@ -1234,42 +1391,16 @@ impl Editor {
                         if self.status_err {
                             return;
                         }
-                        if !bang && self.buffers.iter().any(|b| b.dirty) {
-                            self.set_status(
-                                "E37: No write since last change (add ! to override)".to_string(),
-                                true,
-                            );
-                            return;
-                        }
-                        self.quit = true;
+                        self.quit_or_close_window(bang);
                     }
-                    Cmd::Quit(bang) => {
-                        if self.buffers.iter().any(|b| b.dirty) && !bang {
-                            self.set_status(
-                                "E37: No write since last change (add ! to override)".to_string(),
-                                true,
-                            );
-                        } else {
-                            self.quit = true;
-                        }
-                    }
+                    Cmd::Quit(bang) => self.quit_or_close_window(bang),
+                    Cmd::Split(axis) => self.split(axis),
                     Cmd::Edit(path) => {
                         let p = std::path::PathBuf::from(shrink_tilde(&path));
                         self.edit_path_in_new_buffer(p);
                     }
-                    Cmd::BNext => {
-                        if !self.buffers.is_empty() {
-                            self.activate((self.active + 1) % self.buffers.len());
-                        }
-                        self.ensure_lsp();
-                    }
-                    Cmd::BPrev => {
-                        let len = self.buffers.len();
-                        if len > 0 {
-                            self.activate((self.active + len - 1) % len);
-                        }
-                        self.ensure_lsp();
-                    }
+                    Cmd::BNext => self.cycle_tab(true),
+                    Cmd::BPrev => self.cycle_tab(false),
                     Cmd::Settings => self.open_panel(crate::fuzzy::Panel::Settings),
                     Cmd::Goto(n) => {
                         let last = self.buf().rope.len_lines().saturating_sub(1);
@@ -1364,9 +1495,12 @@ impl Editor {
         self.lsp.ensure(p.as_ref());
     }
 
-    pub fn pos_at_cell(&self, drow: usize, xcell: usize) -> Pos {
-        let b = self.buf();
-        let wrap = self.wrap();
+    pub fn pos_at_window(&self, win: usize, drow: usize, xcell: usize) -> Pos {
+        let Some(w) = self.windows.get(win) else {
+            return Pos { line: 0, col: 0 };
+        };
+        let b = &self.buffers[w.cur_buf()];
+        let wrap = self.wrap_with(w.view_cols);
         let abs = wrap.row_of(
             &b.rope,
             Pos {
@@ -1516,20 +1650,61 @@ impl Editor {
     }
 
     pub fn activate(&mut self, i: usize) {
-        if i != self.active {
+        if i >= self.buffers.len() {
+            return;
+        }
+        let changed = self.active() != i;
+        self.win_mut().show(i);
+        if changed {
             self.reset_buffer_state();
         }
-        self.active = i;
+    }
+
+    fn cycle_tab(&mut self, forward: bool) {
+        let before = self.active();
+        if forward {
+            self.win_mut().next_tab();
+        } else {
+            self.win_mut().prev_tab();
+        }
+        if self.active() != before {
+            self.reset_buffer_state();
+            self.ensure_lsp();
+        }
+    }
+
+    fn quit_or_close_window(&mut self, bang: bool) {
+        if self.windows.len() > 1 {
+            if bang {
+                self.close_window();
+            } else {
+                self.close_window_cmd();
+            }
+            return;
+        }
+        if self.buffers.iter().any(|b| b.dirty) && !bang {
+            self.set_status(
+                "E37: No write since last change (add ! to override)".to_string(),
+                true,
+            );
+        } else {
+            self.quit = true;
+        }
     }
 
     pub fn close_buffer(&mut self, idx: Option<usize>, bang: bool) {
         let i = match idx {
-            Some(n) => n - 1,
-            None => self.active,
+            Some(n) => match self.win().tabs.get(n - 1) {
+                Some(b) => *b,
+                None => {
+                    self.set_status(format!("E16: Invalid argument: {n}"), true);
+                    return;
+                }
+            },
+            None => self.active(),
         };
         if i >= self.buffers.len() {
-            let shown = idx.unwrap_or(0);
-            self.set_status(format!("E16: Invalid argument: {shown}"), true);
+            self.set_status(format!("E16: Invalid argument: {}", idx.unwrap_or(0)), true);
             return;
         }
         if self.buffers[i].dirty && !bang {
@@ -1540,19 +1715,22 @@ impl Editor {
             return;
         }
         let name = self.buffers[i].display_name();
+        let before = self.active();
+        let was_active = i == before;
         self.buffers.remove(i);
+        self.buffers_removed(i);
         if self.buffers.is_empty() {
             self.buffers.push(Buffer::empty());
         }
-        let next = if i < self.active {
-            self.active - 1
-        } else {
-            self.active.min(self.buffers.len() - 1)
-        };
-        if i == self.active {
+        if self.win().tabs.is_empty() && self.windows.len() > 1 {
+            self.close_window();
+            self.set_status(format!("[{name}] closed"), false);
+            return;
+        }
+        let reset = was_active || self.active() != before;
+        if reset {
             self.reset_buffer_state();
         }
-        self.activate(next);
         self.ensure_lsp();
         self.set_status(format!("[{name}] closed"), false);
     }
@@ -1577,7 +1755,7 @@ impl Editor {
                             col
                         };
                         self.buf_mut().cursor = Pos { line, col };
-                        let rows = self.view_rows.max(1);
+                        let rows = self.rows().max(1);
                         self.scroll_to_cursor(rows);
                         self.ensure_lsp();
                     } else {
@@ -1869,12 +2047,17 @@ impl Editor {
         }
         match Buffer::load(&p) {
             Ok(b) => {
-                let empty_cur = {
-                    let cur = self.buf();
-                    !cur.dirty && cur.rope.len_chars() == 0
+                let reuse = {
+                    let cur = self.active();
+                    let scratch = {
+                        let c = self.buf();
+                        !c.dirty && c.rope.len_chars() == 0
+                    };
+                    scratch && self.windows.iter().filter(|w| w.cur_buf() == cur).count() < 2
                 };
-                if empty_cur {
-                    self.buffers[self.active] = b;
+                if reuse {
+                    let cur = self.active();
+                    self.buffers[cur] = b;
                     self.reset_buffer_state();
                 } else {
                     self.buffers.push(b);
@@ -1896,7 +2079,7 @@ impl Editor {
             .position(|b| b.path.as_ref().is_some_and(|q| same_path(q, &p)))
         {
             let name = self.buffers[i].display_name();
-            if i != self.active {
+            if i != self.active() {
                 self.activate(i);
                 self.ensure_lsp();
             }
@@ -1991,8 +2174,11 @@ pub fn visual_col(s: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::keys::key_down;
+    use crate::mode::Pending;
     use crate::motions::Motion;
     use crate::textobjects::Obj;
+    use winit::keyboard::{Key, ModifiersState};
 
     fn ed_with(s: &str) -> Editor {
         let mut ed = Editor::test_new();
@@ -2252,11 +2438,11 @@ mod tests {
         ed.buffers[0] = Buffer::new_file(std::path::Path::new("/tmp/deditor_tab_a"));
         ed.buffers
             .push(Buffer::new_file(std::path::Path::new("/tmp/deditor_tab_b")));
-        ed.active = 1;
+        ed.activate(1);
         ed.cmdline = "c".to_string();
         ed.execute_cmdline();
         assert_eq!(ed.buffers.len(), 1);
-        assert_eq!(ed.active, 0);
+        assert_eq!(ed.active(), 0);
         assert_eq!(ed.buf().display_name(), "deditor_tab_a");
         ed.close_buffer(None, false);
         assert_eq!(ed.buffers.len(), 1);
@@ -2284,26 +2470,29 @@ mod tests {
             .push(Buffer::new_file(std::path::Path::new("/tmp/deditor_tab_b")));
         ed.buffers
             .push(Buffer::new_file(std::path::Path::new("/tmp/deditor_tab_c")));
+        ed.win_mut().show(1);
+        ed.win_mut().show(2);
         ed.close_buffer(Some(1), false);
         assert_eq!(ed.buffers.len(), 2);
         assert_eq!(ed.buffers[0].display_name(), "deditor_tab_b");
-        assert_eq!(ed.active, 0);
+        assert_eq!(ed.win().tabs, [0, 1]);
+        assert_eq!(ed.buf().display_name(), "deditor_tab_c");
         ed.close_buffer(Some(9), false);
         assert!(ed.status_err);
         assert_eq!(ed.buffers.len(), 2);
     }
 
     #[test]
-    fn pos_at_cell_maps_screen_cells_through_wraps() {
+    fn pos_at_window_maps_screen_cells_through_wraps() {
         let mut ed = Editor::test_new();
         let body: String = (0..10).map(|i| format!("line {i}\n")).collect();
         ed.buf_mut().insert_text(&body, false);
-        assert_eq!(ed.pos_at_cell(0, 0), Pos { line: 0, col: 0 });
-        assert_eq!(ed.pos_at_cell(3, 4), Pos { line: 3, col: 4 });
-        assert_eq!(ed.pos_at_cell(1, 100), Pos { line: 1, col: 5 });
+        assert_eq!(ed.pos_at_window(0, 0, 0), Pos { line: 0, col: 0 });
+        assert_eq!(ed.pos_at_window(0, 3, 4), Pos { line: 3, col: 4 });
+        assert_eq!(ed.pos_at_window(0, 1, 100), Pos { line: 1, col: 5 });
         let mut wide = Editor::test_new();
         wide.buf_mut().insert_text(&"x".repeat(200), false);
-        assert_eq!(wide.pos_at_cell(2, 5), Pos { line: 0, col: 165 });
+        assert_eq!(wide.pos_at_window(0, 2, 5), Pos { line: 0, col: 165 });
     }
 
     #[test]
@@ -2862,7 +3051,7 @@ mod tests {
         ed.cmdline = format!("e {}", f.display());
         ed.execute_cmdline();
         assert_eq!(ed.buffers.len(), 2);
-        assert_eq!(ed.active, 1);
+        assert_eq!(ed.active(), 1);
         assert_eq!(text(&ed), "loaded text\n");
         assert_eq!(ed.buf().display_name(), "e.txt");
         assert!(!ed.buf().dirty);
@@ -2871,13 +3060,13 @@ mod tests {
         ed.execute_cmdline();
         assert!(!ed.status_err);
         assert_eq!(ed.buffers.len(), 3);
-        assert_eq!(ed.active, 2);
+        assert_eq!(ed.active(), 2);
         assert_eq!(text(&ed), "");
         assert_eq!(ed.buf().display_name(), "nope.txt");
         ed.cmdline = format!("e {}", f.display());
         ed.execute_cmdline();
         assert_eq!(ed.buffers.len(), 3);
-        assert_eq!(ed.active, 1);
+        assert_eq!(ed.active(), 1);
         assert_eq!(ed.status.as_deref(), Some("\"e.txt\" already open"));
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -2897,7 +3086,7 @@ mod tests {
         assert!(!ed.status_err);
         assert_eq!(ed.status.as_deref(), Some("[New File]"));
         assert_eq!(ed.buffers.len(), 2);
-        assert_eq!(ed.active, 1);
+        assert_eq!(ed.active(), 1);
         assert_eq!(ed.buffers[0].rope.to_string(), "draft\n");
         assert_eq!(text(&ed), "");
         assert_eq!(ed.buf().display_name(), "blank.txt");
@@ -2917,7 +3106,7 @@ mod tests {
     #[test]
     fn vertical_motion_keeps_its_column_across_wraps() {
         let mut ed = ed_with("abcdefghij\nsecond");
-        ed.view_cols = 5;
+        ed.win_mut().view_cols = 5;
         ed.buf_mut().cursor = Pos { line: 0, col: 7 };
         ed.run_motion(Motion::J, 1);
         assert_eq!(ed.buf().cursor, Pos { line: 1, col: 2 });
@@ -2934,7 +3123,7 @@ mod tests {
     fn scrolling_follows_the_cursor_through_a_wrapped_line() {
         let long = "x".repeat(40);
         let mut ed = ed_with(&format!("{long}\nend"));
-        ed.view_cols = 10;
+        ed.win_mut().view_cols = 10;
         ed.buf_mut().cursor = Pos { line: 0, col: 39 };
         ed.scroll_to_cursor(4);
         let b = ed.buf();
@@ -2988,7 +3177,7 @@ mod tests {
     fn centering_counts_wrapped_rows() {
         let long = "y".repeat(20);
         let mut ed = ed_with(&format!("{}\n", long).repeat(8));
-        ed.view_cols = 10;
+        ed.win_mut().view_cols = 10;
         ed.buf_mut().cursor = Pos { line: 5, col: 15 };
         ed.center_cursor(6);
         let b = ed.buf();
@@ -3028,11 +3217,11 @@ mod tests {
         let mut ed = ed_with("keep\n");
         ed.open_path(f.clone());
         assert_eq!(ed.buffers.len(), 2);
-        assert_eq!(ed.active, 1);
+        assert_eq!(ed.active(), 1);
         assert_eq!(text(&ed), "dup text\n");
         ed.open_path(f.clone());
         assert_eq!(ed.buffers.len(), 2);
-        assert_eq!(ed.active, 1);
+        assert_eq!(ed.active(), 1);
         ed.open_path(dir.join(".").join("dup.txt"));
         assert_eq!(ed.buffers.len(), 2);
         std::fs::remove_dir_all(&dir).ok();
@@ -3058,7 +3247,7 @@ mod tests {
             ed.panel_accept();
         }
         assert_eq!(ed.buffers.len(), 2);
-        assert_eq!(ed.active, 1);
+        assert_eq!(ed.active(), 1);
         assert_eq!(text(&ed), "panel text\n");
         std::env::set_current_dir(&saved).unwrap();
         std::fs::remove_dir_all(&dir).ok();
@@ -3126,11 +3315,13 @@ mod tests {
         ed.buffers.push(Buffer::empty());
         ed.buffers.push(Buffer::empty());
         ed.activate(1);
-        ed.close_buffer(Some(1), true);
-        assert_eq!(ed.active, 0);
-        assert_eq!(ed.buffers.len(), 2);
+        ed.win_mut().show(2);
+        assert_eq!(ed.win().tabs, [0, 1, 2]);
         ed.close_buffer(Some(2), true);
-        assert_eq!(ed.active, 0);
+        assert_eq!(ed.buffers.len(), 2);
+        assert_eq!(ed.active(), 1);
+        ed.close_buffer(Some(2), true);
+        assert_eq!(ed.active(), 0);
         assert_eq!(ed.buffers.len(), 1);
     }
 
@@ -3438,5 +3629,111 @@ mod tests {
             completion_target("edit src/ma"),
             Some(("edit src/".into(), "src/".into(), "ma".into()))
         );
+    }
+
+    #[test]
+    fn split_commands_stack_windows_on_the_same_tabs() {
+        let mut ed = ed_with("one\ntwo\n");
+        ed.cmdline = "split".to_string();
+        ed.execute_cmdline();
+        assert_eq!(ed.windows.len(), 2);
+        assert_eq!(ed.active_win, 1);
+        assert_eq!(text(&ed), "one\ntwo\n");
+        ed.cmdline = "vsplit".to_string();
+        ed.execute_cmdline();
+        ed.cmdline = "hsplit".to_string();
+        ed.execute_cmdline();
+        assert_eq!(ed.windows.len(), 4);
+        assert_eq!(ed.win_ids(), vec![0, 1, 2, 3]);
+        assert!(ed.windows.iter().all(|w| w.tabs == vec![0]));
+    }
+
+    #[test]
+    fn split_refuses_when_the_window_is_too_narrow() {
+        let mut ed = ed_with("one\n");
+        ed.win_mut().view_cols = MIN_SPLIT_COLS - 1;
+        ed.cmdline = "vsplit".to_string();
+        ed.execute_cmdline();
+        assert_eq!(ed.windows.len(), 1);
+        assert!(ed.status_err);
+        assert_eq!(ed.status.as_deref(), Some("E36: Not enough room to split"));
+    }
+
+    #[test]
+    fn ctrl_w_prefix_cycles_and_closes_windows() {
+        let mut ed = ed_with("a\n");
+        ed.split(Axis::Columns);
+        assert_eq!(ed.active_win, 1);
+        let b = ed.buf_mut();
+        b.saved = b.rope.clone();
+        b.dirty = false;
+        key_down(
+            &mut ed,
+            &Key::Character("w".into()),
+            ModifiersState::CONTROL,
+        );
+        assert_eq!(ed.pending, Pending::WinCmd);
+        key_down(
+            &mut ed,
+            &Key::Character("w".into()),
+            ModifiersState::CONTROL,
+        );
+        assert_eq!(ed.pending, Pending::None);
+        assert_eq!(ed.active_win, 0);
+        key_down(
+            &mut ed,
+            &Key::Character("w".into()),
+            ModifiersState::CONTROL,
+        );
+        key_down(
+            &mut ed,
+            &Key::Character("w".into()),
+            ModifiersState::empty(),
+        );
+        assert_eq!(ed.active_win, 1);
+        key_down(
+            &mut ed,
+            &Key::Character("w".into()),
+            ModifiersState::CONTROL,
+        );
+        key_down(
+            &mut ed,
+            &Key::Character("c".into()),
+            ModifiersState::empty(),
+        );
+        assert_eq!(ed.windows.len(), 1);
+        assert_eq!(ed.active_win, 0);
+    }
+
+    #[test]
+    fn quit_closes_the_focused_window_and_needs_a_bang_when_dirty() {
+        let mut ed = ed_with("a\n");
+        ed.split(Axis::Columns);
+        ed.buf_mut().insert_text("x", false);
+        ed.cmdline = "q".to_string();
+        ed.execute_cmdline();
+        assert!(ed.status_err);
+        assert_eq!(ed.windows.len(), 2);
+        ed.cmdline = "q!".to_string();
+        ed.execute_cmdline();
+        assert_eq!(ed.windows.len(), 1);
+        assert_eq!(ed.active_win, 0);
+    }
+
+    #[test]
+    fn windows_show_independent_buffers() {
+        let dir = std::env::temp_dir().join(format!("deditor_split_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("b.txt"), "b\n").unwrap();
+        let mut ed = ed_with("a\n");
+        ed.split(Axis::Columns);
+        ed.open_path(dir.join("b.txt"));
+        assert_eq!(ed.win().tabs.len(), 2);
+        assert_eq!(text(&ed), "b\n");
+        ed.focus_next();
+        assert_eq!(ed.active_win, 0);
+        assert_eq!(ed.win().tabs.len(), 1);
+        assert_eq!(text(&ed), "a\n");
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
