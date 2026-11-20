@@ -1,5 +1,5 @@
-use crate::buffer::{Pos, line_text};
-use ropey::Rope;
+use crate::buffer::Pos;
+use ropey::{Rope, RopeSlice};
 
 /// Cells a string occupies in the grid: one for most characters, two for the
 /// wide ones used by CJK and emoji, none for a combining mark.
@@ -36,6 +36,44 @@ pub struct Wrap {
     pub tab_width: usize,
 }
 
+/// The rows of one line, walked in order without building the whole list: a
+/// viewport wants the first few rows of a long line, not all of them. `I` is
+/// the line's characters, so a rope line can be measured without copying it.
+pub struct Rows<'a, I> {
+    wrap: &'a Wrap,
+    chars: I,
+    start: usize,
+    ci: usize,
+    x: usize,
+    done: bool,
+}
+
+impl<I: Iterator<Item = char>> Iterator for Rows<'_, I> {
+    type Item = (usize, usize);
+
+    fn next(&mut self) -> Option<(usize, usize)> {
+        if self.done {
+            return None;
+        }
+        loop {
+            let Some(c) = self.chars.next() else {
+                self.done = true;
+                return Some((self.start, self.ci));
+            };
+            let w = self.wrap.width(c, self.x);
+            if self.x + w > self.wrap.cols && self.x > 0 {
+                let row = (self.start, self.ci);
+                self.start = self.ci;
+                self.x = w;
+                self.ci += 1;
+                return Some(row);
+            }
+            self.x += w;
+            self.ci += 1;
+        }
+    }
+}
+
 impl Wrap {
     pub fn new(cols: usize, tab_width: usize) -> Self {
         Self {
@@ -44,6 +82,7 @@ impl Wrap {
         }
     }
 
+    #[cfg(test)]
     fn body<'a>(&self, line: &'a str) -> &'a str {
         line.strip_suffix('\n').unwrap_or(line)
     }
@@ -56,36 +95,54 @@ impl Wrap {
         }
     }
 
-    pub fn rows(&self, line: &str) -> Vec<(usize, usize)> {
-        let body = self.body(line);
-        let mut out = Vec::new();
-        let mut start = 0usize;
-        let mut ci = 0usize;
-        let mut x = 0usize;
-        for c in body.chars() {
-            let w = self.width(c, x);
-            if x + w > self.cols && x > 0 {
-                out.push((start, ci));
-                start = ci;
-                x = 0;
-            }
-            x += w;
-            ci += 1;
+    /// The rows the line wraps onto, in order and without a list of them.
+    pub fn walk<I: Iterator<Item = char>>(&self, chars: I) -> Rows<'_, I> {
+        Rows {
+            wrap: self,
+            chars,
+            start: 0,
+            ci: 0,
+            x: 0,
+            done: false,
         }
-        out.push((start, ci));
-        out
     }
 
+    #[cfg(test)]
+    pub fn rows(&self, line: &str) -> Vec<(usize, usize)> {
+        self.walk(self.body(line).chars()).collect()
+    }
+
+    #[cfg(test)]
     pub fn row_count(&self, line: &str) -> usize {
-        self.rows(line).len()
+        self.walk(self.body(line).chars()).count()
     }
 
-    /// Row index of char `col` within its own line, and its x inside that row.
-    pub fn pos(&self, line: &str, col: usize) -> (usize, usize) {
-        let body = self.body(line);
+    /// Rows of a rope line, counted without copying the line.
+    pub fn rope_row_count(&self, rope: &Rope, line: usize) -> usize {
+        self.walk(rope.line(line).chars().take_while(|c| *c != '\n'))
+            .count()
+    }
+
+    /// Rows of a rope line, stopping once `limit` of them are counted: a
+    /// caller that only needs to know whether a line fills `limit` rows must
+    /// not measure a megabyte-long line to find out.
+    pub fn rope_row_count_upto(&self, rope: &Rope, line: usize, limit: usize) -> usize {
+        self.walk(rope.line(line).chars().take_while(|c| *c != '\n'))
+            .take(limit)
+            .count()
+    }
+
+    /// Row index of char `col` within its own line, and its x inside that row,
+    /// reading the rope line directly and stopping at `col`.
+    pub fn rope_pos(&self, rope: &Rope, line: usize, col: usize) -> (usize, usize) {
         let mut row = 0usize;
         let mut x = 0usize;
-        for (ci, c) in body.chars().enumerate() {
+        for (ci, c) in rope
+            .line(line)
+            .chars()
+            .take_while(|c| *c != '\n')
+            .enumerate()
+        {
             let w = self.width(c, x);
             if x + w > self.cols && x > 0 {
                 row += 1;
@@ -99,20 +156,70 @@ impl Wrap {
         (row, x)
     }
 
-    /// The text of char range `[start, end)` with tabs expanded for its row.
-    /// With `vis`, blanks render as visible markers: spaces become middots
-    /// and tabs an guillemet followed by middots, each one cell wide.
-    pub fn text(&self, line: &str, start: usize, end: usize, vis: bool) -> String {
-        let body = self.body(line);
+    /// Row index of char `col` within its own line, and its x inside that row.
+    #[cfg(test)]
+    pub fn pos(&self, line: &str, col: usize) -> (usize, usize) {
+        let mut row = 0usize;
+        let mut x = 0usize;
+        for (ci, c) in self.body(line).chars().enumerate() {
+            let w = self.width(c, x);
+            if x + w > self.cols && x > 0 {
+                row += 1;
+                x = 0;
+            }
+            if ci == col {
+                return (row, x);
+            }
+            x += w;
+        }
+        (row, x)
+    }
+
+    /// The line without its newline, so a single row can be read without
+    /// copying the whole line.
+    fn line_body<'r>(&self, rope: &'r Rope, line: usize) -> RopeSlice<'r> {
+        let ls = rope.line(line);
+        if line + 1 < rope.len_lines() {
+            ls.slice(0..ls.len_chars().saturating_sub(1))
+        } else {
+            ls
+        }
+    }
+
+    /// Cell x of char `col` on the row of `line` that begins at `start`: the
+    /// same x `rope_pos` reports for a `col` inside that row, reading only
+    /// `[start, col)`.
+    pub fn row_x(&self, rope: &Rope, line: usize, start: usize, col: usize) -> usize {
+        let ls = self.line_body(rope, line);
+        let mut x = 0usize;
+        for c in ls
+            .slice(start.min(ls.len_chars())..col.min(ls.len_chars()))
+            .chars()
+        {
+            x += self.width(c, x);
+        }
+        x
+    }
+
+    /// The text of char range `[start, end)` of a rope line, with tabs expanded
+    /// for a row that begins at `start`. With `vis`, blanks render as visible
+    /// markers: spaces become middots and tabs a guillemet followed by
+    /// middots, each one cell wide.
+    pub fn row_text(
+        &self,
+        rope: &Rope,
+        line: usize,
+        start: usize,
+        end: usize,
+        vis: bool,
+    ) -> String {
+        let ls = self.line_body(rope, line);
         let mut out = String::new();
         let mut x = 0usize;
-        for (ci, c) in body.chars().enumerate() {
-            if ci >= end {
-                break;
-            }
-            if ci < start {
-                continue;
-            }
+        for c in ls
+            .slice(start.min(ls.len_chars())..end.min(ls.len_chars()))
+            .chars()
+        {
             if c == '\t' {
                 let w = self.tab_width - (x % self.tab_width);
                 if vis {
@@ -148,11 +255,11 @@ impl Wrap {
         let mut sub = view_sub;
         let mut left = delta;
         while left > 0 && top < last {
+            let n = left as usize;
             let avail = self
-                .row_count(&line_text(rope, top))
+                .rope_row_count_upto(rope, top, sub + n + 1)
                 .saturating_sub(sub)
                 .max(1);
-            let n = left as usize;
             if n < avail {
                 sub += n;
                 left = 0;
@@ -174,7 +281,7 @@ impl Wrap {
                 break;
             }
             top -= 1;
-            sub = self.row_count(&line_text(rope, top)) - 1;
+            sub = self.rope_row_count(rope, top) - 1;
         }
         (top, sub)
     }
@@ -203,7 +310,7 @@ impl Wrap {
                 line += 1;
                 continue;
             }
-            for (start, end) in self.rows(&line_text(rope, line)) {
+            for (start, end) in self.walk(rope.line(line).chars().take_while(|c| *c != '\n')) {
                 if skip > 0 {
                     skip -= 1;
                     continue;
@@ -236,14 +343,15 @@ impl Wrap {
         if pos.line < view_top {
             return None;
         }
-        let top_rows = self.row_count(&line_text(rope, view_top));
-        let mut row = self.pos(&line_text(rope, pos.line), pos.col).0;
+        let mut row = self.rope_pos(rope, pos.line, pos.col).0;
         if pos.line == view_top {
+            let top_rows = self.rope_row_count_upto(rope, view_top, view_sub + 1);
             return row.checked_sub(view_sub.min(top_rows - 1));
         }
+        let top_rows = self.rope_row_count(rope, view_top);
         row += top_rows - view_sub.min(top_rows - 1);
         for line in view_top + 1..pos.line {
-            row += self.row_count(&line_text(rope, line));
+            row += self.rope_row_count(rope, line);
         }
         Some(row)
     }
@@ -253,9 +361,9 @@ impl Wrap {
         let line = pos.line.min(rope.len_lines().saturating_sub(1));
         let mut row = 0;
         for l in 0..line {
-            row += self.row_count(&line_text(rope, l));
+            row += self.rope_row_count(rope, l);
         }
-        row + self.pos(&line_text(rope, line), pos.col).0
+        row + self.rope_pos(rope, line, pos.col).0
     }
 
     /// The `(line, sub-row)` holding absolute screen row `row`, clamped to the
@@ -263,23 +371,20 @@ impl Wrap {
     pub fn anchor(&self, rope: &Rope, row: usize) -> (usize, usize) {
         let mut left = row;
         for line in 0..rope.len_lines() {
-            let rows = self.row_count(&line_text(rope, line));
+            let rows = self.rope_row_count(rope, line);
             if left < rows {
                 return (line, left);
             }
             left -= rows;
         }
         let last = rope.len_lines().saturating_sub(1);
-        (
-            last,
-            self.row_count(&line_text(rope, last)).saturating_sub(1),
-        )
+        (last, self.rope_row_count(rope, last).saturating_sub(1))
     }
 
     /// How many screen rows the whole buffer occupies.
     pub fn total_rows(&self, rope: &Rope) -> usize {
         (0..rope.len_lines())
-            .map(|l| self.row_count(&line_text(rope, l)))
+            .map(|l| self.rope_row_count(rope, l))
             .sum()
     }
 
@@ -287,11 +392,11 @@ impl Wrap {
     /// `pos`, clamped to the first and last row of the buffer.
     pub fn shift(&self, rope: &Rope, pos: Pos, delta: i64) -> (usize, usize) {
         let mut line = pos.line;
-        let mut sub = self.pos(&line_text(rope, line), pos.col).0;
+        let mut sub = self.rope_pos(rope, line, pos.col).0;
         let last = rope.len_lines().saturating_sub(1);
         let mut step = delta.abs();
         while step > 0 {
-            let rows = self.row_count(&line_text(rope, line));
+            let rows = self.rope_row_count(rope, line);
             if delta > 0 {
                 if line == last && sub + 1 >= rows {
                     break;
@@ -306,7 +411,7 @@ impl Wrap {
                 sub -= 1;
             } else if line > 0 {
                 line -= 1;
-                sub = self.row_count(&line_text(rope, line)) - 1;
+                sub = self.rope_row_count(rope, line) - 1;
             } else {
                 break;
             }
@@ -318,15 +423,25 @@ impl Wrap {
     /// Char index on row `sub` of `line` whose cell x is nearest `x`, never
     /// past the row's last cell.
     pub fn col_at(&self, rope: &Rope, line: usize, sub: usize, x: usize) -> usize {
-        let text = line_text(rope, line);
-        let body = self.body(&text);
-        let rows = self.rows(body);
-        let (start, end) = rows[sub.min(rows.len() - 1)];
-        let mut cx = 0usize;
-        for (ci, c) in body.chars().enumerate().skip(start) {
-            if ci >= end {
+        let mut row = (0, 0);
+        for (n, r) in self
+            .walk(rope.line(line).chars().take_while(|c| *c != '\n'))
+            .enumerate()
+        {
+            row = r;
+            if n >= sub {
                 break;
             }
+        }
+        let (start, end) = row;
+        let mut cx = 0usize;
+        for (ci, c) in rope
+            .line(line)
+            .chars()
+            .enumerate()
+            .skip(start)
+            .take(end.saturating_sub(start))
+        {
             if cx >= x {
                 return ci;
             }
@@ -356,21 +471,23 @@ mod tests {
     #[test]
     fn tabs_stay_whole_and_reanchor_per_row() {
         let w = Wrap::new(4, 4);
+        let txt = |s: &str, from: usize, to: usize| w.row_text(&rope(s), 0, from, to, false);
         assert_eq!(w.rows("\tab"), vec![(0, 1), (1, 3)]);
-        assert_eq!(w.text("\tab", 1, 3, false), "ab");
+        assert_eq!(txt("\tab", 1, 3), "ab");
         assert_eq!(w.rows("\t a"), vec![(0, 1), (1, 3)]);
-        assert_eq!(w.text("\t a", 1, 3, false), " a");
+        assert_eq!(txt("\t a", 1, 3), " a");
     }
 
     #[test]
     fn vis_markers_stay_one_cell_wide() {
         let w = Wrap::new(10, 4);
-        assert_eq!(w.text("a b", 0, 3, true), "a\u{b7}b");
-        assert_eq!(w.text("\tab", 0, 3, true), "\u{bb}\u{b7}\u{b7}\u{b7}ab");
-        assert_eq!(w.text("a\tb", 0, 3, true), "a\u{bb}\u{b7}\u{b7}b");
+        let txt = |s: &str, vis: bool| w.row_text(&rope(s), 0, 0, 3, vis);
+        assert_eq!(txt("a b", true), "a\u{b7}b");
+        assert_eq!(txt("\tab", true), "\u{bb}\u{b7}\u{b7}\u{b7}ab");
+        assert_eq!(txt("a\tb", true), "a\u{bb}\u{b7}\u{b7}b");
         assert_eq!(
-            w.text("\tab", 0, 3, true).chars().count(),
-            w.text("\tab", 0, 3, false).chars().count()
+            txt("\tab", true).chars().count(),
+            txt("\tab", false).chars().count()
         );
     }
 
@@ -389,7 +506,7 @@ mod tests {
     fn vertical_move_counts_rows_not_lines() {
         let r = rope("aaa\nbbbbbb\nccc");
         let w = Wrap::new(3, 4);
-        assert_eq!(w.row_count(&line_text(&r, 1)), 2);
+        assert_eq!(w.row_count(&r.line(1).to_string()), 2);
         assert_eq!(w.shift(&r, Pos { line: 1, col: 0 }, 1), (1, 1));
         assert_eq!(w.shift(&r, Pos { line: 1, col: 4 }, 1), (2, 0));
         assert_eq!(w.shift(&r, Pos { line: 2, col: 0 }, -1), (1, 1));
@@ -467,5 +584,103 @@ mod tests {
         assert_eq!(w.row_count("日本語"), 1);
         assert_eq!(w.pos("a😀b", 2), (0, 3));
         assert_eq!(w.pos("a😀b", 3), (0, 4));
+    }
+
+    #[test]
+    fn row_x_matches_pos_inside_a_row() {
+        let w = Wrap::new(4, 4);
+        let line = "ab\tc😀de";
+        let r = rope(line);
+        for row in w.rows(line) {
+            for col in row.0..row.1 {
+                assert_eq!(w.row_x(&r, 0, row.0, col), w.pos(line, col).1, "col {col}");
+            }
+        }
+    }
+
+    #[test]
+    fn row_text_expands_tabs_from_the_row_start() {
+        let r = rope("a\tb\nc");
+        let w = Wrap::new(8, 4);
+        assert_eq!(w.row_text(&r, 0, 0, 3, false), "a   b");
+        assert_eq!(w.row_text(&r, 0, 2, 3, false), "b");
+        assert_eq!(w.row_text(&r, 0, 0, 3, true), "a\u{bb}\u{b7}\u{b7}b");
+        assert_eq!(w.row_text(&r, 1, 0, 1, false), "c");
+    }
+
+    #[test]
+    fn rope_reading_matches_line_reading() {
+        let r = rope("ab\tc😀de\nx\ny\tz");
+        let w = Wrap::new(4, 4);
+        for line in 0..r.len_lines() {
+            let text = r.line(line).to_string();
+            assert_eq!(w.rope_row_count(&r, line), w.row_count(&text));
+            let end = text.trim_end_matches('\n').chars().count();
+            for col in 0..=end {
+                assert_eq!(
+                    w.rope_pos(&r, line, col),
+                    w.pos(&text, col),
+                    "line {line} col {col}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn viewport_rows_stop_at_the_row_budget() {
+        let r = rope("aaaaa\nbbbbb");
+        let w = Wrap::new(2, 4);
+        let ids = |rows: &[ScreenRow]| -> Vec<(usize, usize, usize)> {
+            rows.iter().map(|s| (s.line, s.start, s.end)).collect()
+        };
+        assert_eq!(
+            ids(&w.screen_rows(&r, 0, 0, 3)),
+            vec![(0, 0, 2), (0, 2, 4), (0, 4, 5)]
+        );
+        assert_eq!(
+            ids(&w.screen_rows(&r, 0, 2, 4)),
+            vec![(0, 4, 5), (1, 0, 2), (1, 2, 4), (1, 4, 5)]
+        );
+    }
+
+    #[test]
+    fn clicks_below_the_last_row_use_its_last_char() {
+        let r = rope("abcdef");
+        let w = Wrap::new(2, 4);
+        assert_eq!(w.col_at(&r, 0, 0, 0), 0);
+        assert_eq!(w.col_at(&r, 0, 1, 0), 2);
+        assert_eq!(w.col_at(&r, 0, 9, 0), 4);
+    }
+
+    #[test]
+    fn row_count_stops_at_the_limit() {
+        let r = rope("aaaaaaaaa");
+        let w = Wrap::new(2, 4);
+        assert_eq!(w.rope_row_count(&r, 0), 5);
+        assert_eq!(w.rope_row_count_upto(&r, 0, 3), 3);
+        assert_eq!(w.rope_row_count_upto(&r, 0, 9), 5);
+    }
+
+    #[test]
+    fn caret_row_needs_only_the_rows_above_it() {
+        let r = rope(&"x".repeat(2000));
+        let w = Wrap::new(10, 4);
+        assert_eq!(w.screen_row(&r, 0, 0, Pos { line: 0, col: 0 }), Some(0));
+        assert_eq!(
+            w.screen_row(&r, 0, 7, Pos { line: 0, col: 80 }),
+            Some(1),
+            "row 8 of a line whose first seven rows are scrolled off"
+        );
+        assert_eq!(w.screen_row(&r, 0, 9, Pos { line: 0, col: 0 }), None);
+    }
+
+    #[test]
+    fn scrolling_forward_leaves_a_line_once_its_rows_run_out() {
+        let r = rope("aaaaa\nb");
+        let w = Wrap::new(2, 4);
+        assert_eq!(w.scroll(&r, 0, 0, 1), (0, 1));
+        assert_eq!(w.scroll(&r, 0, 1, 1), (0, 2));
+        assert_eq!(w.scroll(&r, 0, 2, 1), (1, 0));
+        assert_eq!(w.scroll(&r, 0, 0, 9), (1, 0));
     }
 }

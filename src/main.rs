@@ -430,11 +430,19 @@ impl App {
         };
         let b = ed.buf();
         let wrap = ed.wrap_with(ed.win().view_cols.max(1));
-        let line = buffer::line_text(&b.rope, b.cursor.line.min(b.rope.len_lines() - 1));
         let row = wrap
             .screen_row(&b.rope, b.view_top, b.view_sub, b.cursor)
             .unwrap_or(0);
-        let x = (r.x + r.gutter + wrap.pos(&line, b.cursor.col).1 as u32) as f64 * ts.cell_w as f64;
+        let x = (r.x
+            + r.gutter
+            + wrap
+                .rope_pos(
+                    &b.rope,
+                    b.cursor.line.min(b.rope.len_lines() - 1),
+                    b.cursor.col,
+                )
+                .1 as u32) as f64
+            * ts.cell_w as f64;
         let y = (r.y + 1 + row as u32) as f64 * ts.cell_h as f64;
         w.set_ime_cursor_area(
             PhysicalPosition::new(x, y),

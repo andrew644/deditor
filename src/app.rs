@@ -438,16 +438,12 @@ impl Editor {
         let off = SCROLLOFF.min((rows - 1) / 2);
         let wrap = self.wrap();
         let last = self.buf().rope.len_lines().saturating_sub(1);
-        let rows_at =
-            |line: usize| wrap.row_count(&crate::buffer::line_text(&self.buf().rope, line));
+        let rows_at = |line: usize| wrap.rope_row_count(&self.buf().rope, line);
         let cursor = self.buf().cursor;
         let mut top = self.buf().view_top.min(last);
         let mut sub = self.buf().view_sub.min(rows_at(top) - 1);
         let wc = wrap
-            .pos(
-                &crate::buffer::line_text(&self.buf().rope, cursor.line),
-                cursor.col,
-            )
+            .rope_pos(&self.buf().rope, cursor.line.min(last), cursor.col)
             .0;
         let want_low = rows - 1 - off;
         let place = |target: usize| -> (usize, usize) {
@@ -1167,8 +1163,13 @@ impl Editor {
     fn motion_ctx(&self, vertical: bool) -> crate::motions::Ctx {
         let wrap = self.wrap();
         let b = self.buf();
-        let text = crate::buffer::line_text(&b.rope, b.cursor.line);
-        let here = wrap.pos(&text, b.cursor.col).1;
+        let here = wrap
+            .rope_pos(
+                &b.rope,
+                b.cursor.line.min(b.rope.len_lines().saturating_sub(1)),
+                b.cursor.col,
+            )
+            .1;
         crate::motions::Ctx {
             rows: self.rows(),
             wrap,
@@ -1658,10 +1659,9 @@ impl Editor {
         let last = b.rope.len_lines().saturating_sub(1);
         let line = row.line.min(last);
         let sub = wrap
-            .rows(&crate::buffer::line_text(&b.rope, line))
-            .iter()
-            .position(|&(s, _)| s == row.start)
-            .unwrap_or(0);
+            .walk(b.rope.line(line).chars().take_while(|c| *c != '\n'))
+            .take_while(|&(s, _)| s != row.start)
+            .count();
         Pos {
             line,
             col: wrap.col_at(&b.rope, line, sub, xcell),

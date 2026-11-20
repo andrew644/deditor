@@ -321,23 +321,6 @@ fn popup_rects(
     }
 }
 
-/// Text of the buffer line a screen-row loop last looked at. Wrapped lines
-/// repeat the same buffer line over many screen rows.
-struct LineCache {
-    line: usize,
-    text: String,
-}
-
-impl LineCache {
-    fn get(&mut self, rope: &ropey::Rope, line: usize) -> &str {
-        if self.line != line {
-            self.line = line;
-            self.text = crate::buffer::line_text(rope, line);
-        }
-        &self.text
-    }
-}
-
 pub struct TabHit {
     pub x0: f32,
     pub x1: f32,
@@ -530,10 +513,6 @@ pub fn draw_content(
             }
             _ => ed.search.clone(),
         };
-        let mut lines = LineCache {
-            line: usize::MAX,
-            text: String::new(),
-        };
         if let Some(term) = hi_term {
             let t: Vec<char> = term.chars().collect();
             let fold = crate::search::ignore_case(&term);
@@ -542,17 +521,18 @@ pub fn draw_content(
                     if scr.line >= buf.rope.len_lines() || scr.start >= scr.end {
                         continue;
                     }
-                    let raw = lines.get(&buf.rope, scr.line);
-                    let chars: Vec<char> = raw.chars().collect();
-                    for i in scr.start..scr.end {
-                        if i + t.len() > chars.len() {
-                            break;
-                        }
-                        if !crate::search::matches_at(&chars, &t, i, fold) {
+                    let ls = buf.rope.line(scr.line);
+                    let look = (scr.end + t.len() - 1).min(ls.len_chars());
+                    let chars: Vec<char> = ls.slice(scr.start..look).chars().collect();
+                    for j in 0..(scr.end - scr.start).min(chars.len()) {
+                        if !crate::search::matches_at(&chars, &t, j, fold) {
                             continue;
                         }
+                        let i = scr.start + j;
                         rects.push(rects::RectInstance {
-                            x: ox + (gutter + wrap.pos(raw, i).1) as f32 * cw,
+                            x: ox
+                                + (gutter + wrap.row_x(&buf.rope, scr.line, scr.start, i)) as f32
+                                    * cw,
                             y: wy + r as f32 * ch,
                             w: t.len().min(scr.end - i) as f32 * cw,
                             h: ch,
@@ -567,7 +547,6 @@ pub fn draw_content(
                 if scr.line >= buf.rope.len_lines() || scr.start >= scr.end {
                     continue;
                 }
-                let raw = lines.get(&buf.rope, scr.line);
                 let Some((_, spans)) = ed.spell.spans.get(&scr.line) else {
                     continue;
                 };
@@ -576,7 +555,9 @@ pub fn draw_content(
                         continue;
                     }
                     rects.push(rects::RectInstance {
-                        x: ox + (gutter + wrap.pos(raw, col).1) as f32 * cw,
+                        x: ox
+                            + (gutter + wrap.row_x(&buf.rope, scr.line, scr.start, col)) as f32
+                                * cw,
                         y: wy + r as f32 * ch + ch - 2.0,
                         w: len.min(scr.end - col) as f32 * cw,
                         h: 2.0,
@@ -593,10 +574,13 @@ pub fn draw_content(
                 if scr.line < r0 || scr.line > r1 || scr.line >= buf.rope.len_lines() {
                     continue;
                 }
-                let raw = lines.get(&buf.rope, scr.line);
-                let len = raw.chars().count();
-                let lx = (gutter + wrap.pos(raw, c0.min(len)).1) as f32 * cw;
-                let mut width = (gutter + wrap.pos(raw, (c1 + 1).min(len)).1) as f32 * cw - lx;
+                let slice = buf.rope.line(scr.line);
+                let len = slice.len_chars() - usize::from(scr.line + 1 < buf.rope.len_lines());
+                let a = c0.clamp(scr.start, scr.end);
+                let b = (c1 + 1).clamp(scr.start, scr.end);
+                let lx = (gutter + wrap.row_x(&buf.rope, scr.line, scr.start, a)) as f32 * cw;
+                let mut width =
+                    (gutter + wrap.row_x(&buf.rope, scr.line, scr.start, b)) as f32 * cw - lx;
                 if c1 + 1 > len {
                     width += (c1 + 1 - len) as f32 * cw;
                 }
@@ -619,7 +603,6 @@ pub fn draw_content(
                 if line >= buf.rope.len_lines() || scr.start >= scr.end {
                     continue;
                 }
-                let raw = lines.get(&buf.rope, scr.line);
                 let (from, to) = match sel_row_span(sa, sb, lw, line) {
                     Some(f) => f,
                     None => continue,
@@ -629,12 +612,12 @@ pub fn draw_content(
                 if a >= scr.end {
                     continue;
                 }
-                let lx = (gutter + wrap.pos(raw, a).1) as f32 * cw;
+                let lx = (gutter + wrap.row_x(&buf.rope, scr.line, scr.start, a)) as f32 * cw;
                 let width = if to == usize::MAX {
                     wc - lx
                 } else {
                     let b = to.min(scr.end).max(a + 1);
-                    (gutter + wrap.pos(raw, b).1) as f32 * cw - lx
+                    (gutter + wrap.row_x(&buf.rope, scr.line, scr.start, b)) as f32 * cw - lx
                 };
                 if width <= 0.0 {
                     continue;
@@ -648,8 +631,8 @@ pub fn draw_content(
                 });
             }
         }
-        let cur_line = crate::buffer::line_text(&buf.rope, buf.cursor.line);
-        let cur_x = ox + (gutter + wrap.pos(&cur_line, buf.cursor.col).1) as f32 * cw;
+        let cur_x =
+            ox + (gutter + wrap.rope_pos(&buf.rope, buf.cursor.line, buf.cursor.col).1) as f32 * cw;
         if focused
             && ed.cmd_kind.is_none()
             && let Some(row) = cursor_row
@@ -699,8 +682,13 @@ pub fn draw_content(
                         s.push(' ');
                     }
                 }
-                let raw = lines.get(&buf.rope, row.line);
-                body_s.push_str(&wrap.text(raw, row.start, row.end, ed.config.show_whitespace));
+                body_s.push_str(&wrap.row_text(
+                    &buf.rope,
+                    row.line,
+                    row.start,
+                    row.end,
+                    ed.config.show_whitespace,
+                ));
             }
             if r + 1 < rows.len() {
                 gutter_s.push('\n');
@@ -805,8 +793,8 @@ pub fn draw_content(
     let buf = ed.buf();
     let wrap = ed.wrap();
     let cursor_row = wrap.screen_row(&buf.rope, buf.view_top, buf.view_sub, buf.cursor);
-    let cur_line = crate::buffer::line_text(&buf.rope, buf.cursor.line);
-    let cur_x = ox + (gutter + wrap.pos(&cur_line, buf.cursor.col).1) as f32 * cw;
+    let cur_x =
+        ox + (gutter + wrap.rope_pos(&buf.rope, buf.cursor.line, buf.cursor.col).1) as f32 * cw;
     let diags = ed.lsp.diags_for(buf.path.as_ref());
     let cursor_diag = diags.iter().find(|d| d.line == buf.cursor.line).map(|d| {
         let tag = match d.severity {
