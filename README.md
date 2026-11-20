@@ -233,7 +233,8 @@ not filtered and lists everything.
 Files in a working tree show change signs in the gutter, diffed with libgit2
 against the last commit: green `+` for added lines, yellow `~` for modified
 ones, and red `-` on the line below a deletion. Signs recompute when you leave
-insert mode; set `git_signs: false` to drop the column entirely.
+insert mode; `F6` hides the column for the session, and `git_signs: false` in
+the config drops it at startup.
 
 `F5` adds a `date author` column on the left showing who last changed each
 line. The blame runs on the buffer's own text, so lines keep their author while
@@ -248,6 +249,7 @@ the file has unsaved edits; lines that are in no commit stay blank.
 | `F3` | toggle dark / light theme |
 | `F4` | show / hide git-ignored files in the file panel |
 | `F5` | show / hide git blame |
+| `F6` | show / hide the git change signs in the gutter |
 
 Mouse: wheel scrolls, left-click switches tabs, right-click opens a context
 menu of relevant keys for the word under the pointer (e.g. `gd`, `K`, `viw`).

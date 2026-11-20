@@ -589,6 +589,17 @@ impl Editor {
         self.set_status(format!("git blame: {state}"), false);
     }
 
+    /// Shows or hides the gutter change marks. The cached marks are dropped so
+    /// that showing them again re-diffs instead of waiting for an edit.
+    pub fn toggle_signs(&mut self) {
+        self.config.git_signs = !self.config.git_signs;
+        for b in &mut self.buffers {
+            b.sign_rev = u64::MAX;
+        }
+        let state = if self.config.git_signs { "on" } else { "off" };
+        self.set_status(format!("git signs: {state}"), false);
+    }
+
     pub fn center_cursor(&mut self, rows: usize) {
         let rows = rows.max(1);
         let wrap = self.wrap();
@@ -2509,6 +2520,25 @@ mod tests {
         ed.refresh_marks();
         assert!(ed.buffers[0].signs.is_empty());
         assert!(!ed.has_signs(0));
+    }
+
+    #[test]
+    fn toggling_signs_rediffs_the_gutter() {
+        let (mut ed, _) = editor_on("signstoggle");
+        ed.refresh_marks();
+        assert!(ed.has_signs(0));
+        ed.toggle_signs();
+        assert_eq!(ed.status.as_deref(), Some("git signs: off"));
+        ed.refresh_marks();
+        assert!(ed.buffers[0].signs.is_empty());
+        assert!(!ed.has_signs(0));
+        ed.toggle_signs();
+        assert_eq!(ed.status.as_deref(), Some("git signs: on"));
+        ed.refresh_marks();
+        assert!(
+            ed.has_signs(0),
+            "showing the signs again must re-diff, not wait for an edit"
+        );
     }
 
     #[test]
