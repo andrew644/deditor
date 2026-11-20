@@ -347,6 +347,7 @@ impl ApplicationHandler for App {
                         b.cursor.col = len.saturating_sub(1);
                     }
                 }
+                ed.comp_cancel();
                 let menu = ed.context_menu_text();
                 ed.context_menu = Some(menu);
                 if let Some(w) = &self.window {

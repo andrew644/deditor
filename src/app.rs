@@ -1920,9 +1920,12 @@ impl Editor {
                     self.set_status("No definition found".into(), true);
                 }
                 crate::lsp::Ev::Timeout => {
+                    self.comp_cancel();
                     self.set_status("LSP request timed out".into(), true);
                 }
                 crate::lsp::Ev::Died => {
+                    self.comp_cancel();
+                    self.lsp.hover = None;
                     self.set_status("language server exited".into(), true);
                 }
             }
