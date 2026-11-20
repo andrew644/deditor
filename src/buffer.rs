@@ -351,28 +351,35 @@ impl Buffer {
         text
     }
 
+    fn apply_change(&mut self, change: &Change, reverse: bool) {
+        match change {
+            Change::Insert { at, text } | Change::Delete { at, text } => {
+                let off = self.offset_of(*at);
+                let add = matches!(change, Change::Insert { .. }) != reverse;
+                if add {
+                    self.rope.insert(off, text);
+                } else {
+                    cut(&mut self.rope, off, text.chars().count());
+                }
+            }
+            Change::Replace { edits } => {
+                let prefixes = reverse.then(|| replace_prefix_shifts(edits));
+                for (n, (off, old, new)) in edits.iter().enumerate().rev() {
+                    let (removed, restored) = if reverse { (new, old) } else { (old, new) };
+                    let pre = prefixes.as_ref().map_or(0, |p| p[n]);
+                    let o = (*off as i64 + pre).clamp(0, self.rope.len_chars() as i64) as usize;
+                    cut(&mut self.rope, o, removed.chars().count());
+                    self.rope.insert(o, restored);
+                }
+            }
+        }
+    }
+
     pub fn undo(&mut self) {
         let Some(e) = self.undo.pop() else {
             return;
         };
-        match &e.change {
-            Change::Insert { at, text } => {
-                let off = self.offset_of(*at);
-                cut(&mut self.rope, off, text.chars().count());
-            }
-            Change::Delete { at, text } => {
-                let off = self.offset_of(*at);
-                self.rope.insert(off, text);
-            }
-            Change::Replace { edits } => {
-                let prefixes = replace_prefix_shifts(edits);
-                for ((off, old, new), pre) in edits.iter().zip(&prefixes).rev() {
-                    let o = (*off as i64 + *pre).clamp(0, self.rope.len_chars() as i64) as usize;
-                    cut(&mut self.rope, o, new.chars().count());
-                    self.rope.insert(o, old);
-                }
-            }
-        }
+        self.apply_change(&e.change, true);
         self.cursor = e.cursor_before;
         self.clamp();
         self.revision += 1;
@@ -384,22 +391,7 @@ impl Buffer {
         let Some(e) = self.redo.pop() else {
             return;
         };
-        match &e.change {
-            Change::Insert { at, text } => {
-                let off = self.offset_of(*at);
-                self.rope.insert(off, text);
-            }
-            Change::Delete { at, text } => {
-                let off = self.offset_of(*at);
-                cut(&mut self.rope, off, text.chars().count());
-            }
-            Change::Replace { edits } => {
-                for (off, old, new) in edits.iter().rev() {
-                    cut(&mut self.rope, *off, old.chars().count());
-                    self.rope.insert(*off, new);
-                }
-            }
-        }
+        self.apply_change(&e.change, false);
         self.cursor = e.cursor_after;
         self.clamp();
         self.revision += 1;
