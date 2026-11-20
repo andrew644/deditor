@@ -1593,4 +1593,22 @@ mod tests {
         assert_eq!(pad_line("日本語", 6), "日本語");
         assert_eq!(elide_path("src/日本語.rs", 7), "…語.rs");
     }
+
+    #[test]
+    fn popup_highlight_sits_on_the_requested_row() {
+        let (theme, _) =
+            crate::config::RgbTheme::from_theme_checked(&crate::config::Theme::default());
+        let mut plain = Vec::new();
+        popup_rects(&mut plain, &theme, (10.0, 20.0, 100.0, 40.0), None, 8.0);
+        assert_eq!(plain.len(), 1);
+        assert_eq!(plain[0].color, theme.popup_bg);
+        let mut marked = Vec::new();
+        popup_rects(&mut marked, &theme, (10.0, 20.0, 100.0, 40.0), Some(2), 8.0);
+        assert_eq!(marked.len(), 2);
+        assert_eq!(
+            (marked[1].x, marked[1].y, marked[1].w, marked[1].h),
+            (10.0, 36.0, 100.0, 8.0)
+        );
+        assert_eq!(marked[1].color, theme.popup_sel);
+    }
 }
