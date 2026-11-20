@@ -481,8 +481,8 @@ pub fn draw_content(
         let wrap = ed.wrap_with((wr.cols as usize).saturating_sub(wr.gutter as usize).max(1));
         let rows = wrap.screen_rows(
             &buf.rope,
-            buf.view_top,
-            buf.view_sub,
+            win.view_top,
+            win.view_sub,
             wr.body_rows() as usize,
         );
         let mut tab_text = String::new();
@@ -507,7 +507,11 @@ pub fn draw_content(
                 },
             });
         }
-        let cursor_row = wrap.screen_row(&buf.rope, buf.view_top, buf.view_sub, buf.cursor);
+        let cursor_row = if focused {
+            wrap.screen_row(&buf.rope, win.view_top, win.view_sub, buf.cursor)
+        } else {
+            None
+        };
         if focused
             && let Some(row) = cursor_row
             && row < rows.len()
@@ -641,13 +645,14 @@ pub fn draw_content(
                 });
             }
         }
-        let cur_x =
-            ox + (gutter + wrap.rope_pos(&buf.rope, buf.cursor.line, buf.cursor.col).1) as f32 * cw;
         if focused
             && ed.cmd_kind.is_none()
             && let Some(row) = cursor_row
             && row < rows.len()
         {
+            let cur_x = ox
+                + (gutter + wrap.rope_pos(&buf.rope, buf.cursor.line, buf.cursor.col).1) as f32
+                    * cw;
             rects.push(rects::RectInstance {
                 x: cur_x,
                 y: wy + row as f32 * ch,
@@ -799,9 +804,10 @@ pub fn draw_content(
     let wc = f.cols as f32 * cw;
     let wh = f.height as f32 * ch;
     let gutter = f.gutter as usize;
+    let win = ed.win();
     let buf = ed.buf();
     let wrap = ed.wrap();
-    let cursor_row = wrap.screen_row(&buf.rope, buf.view_top, buf.view_sub, buf.cursor);
+    let cursor_row = wrap.screen_row(&buf.rope, win.view_top, win.view_sub, buf.cursor);
     let cur_x =
         ox + (gutter + wrap.rope_pos(&buf.rope, buf.cursor.line, buf.cursor.col).1) as f32 * cw;
     let diags = ed.lsp.diags_for(buf.path.as_ref());
@@ -948,8 +954,8 @@ pub fn draw_content(
             + wrap
                 .screen_row(
                     &buf.rope,
-                    buf.view_top,
-                    buf.view_sub,
+                    win.view_top,
+                    win.view_sub,
                     crate::buffer::Pos {
                         line: cs.line,
                         col: 0,

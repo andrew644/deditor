@@ -17,6 +17,11 @@ pub struct Window {
     pub cur: usize,
     pub view_rows: usize,
     pub view_cols: usize,
+    /// The window's own viewport anchor: the first buffer row it shows, and
+    /// how many wrapped rows into that line it starts. It lives here, not on
+    /// the buffer, so two windows on one buffer can sit at different places.
+    pub view_top: usize,
+    pub view_sub: usize,
 }
 
 impl Window {
@@ -26,6 +31,8 @@ impl Window {
             cur: 0,
             view_rows: 24,
             view_cols: 80,
+            view_top: 0,
+            view_sub: 0,
         }
     }
 

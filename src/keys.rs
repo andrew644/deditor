@@ -1028,20 +1028,21 @@ mod tests {
         ed.buf_mut().cursor = Pos { line: 30, col: 2 };
         type_keys(&mut ed, &[Key::Character("z".into())]);
         assert_eq!(ed.pending, Pending::Z);
-        assert_eq!(ed.buf().view_top, 0);
+        assert_eq!(ed.win().view_top, 0);
         type_keys(&mut ed, &[Key::Character("z".into())]);
         let b = ed.buf();
-        assert_eq!((b.view_top, b.view_sub), (25, 0));
+        let w = ed.win();
+        assert_eq!((w.view_top, w.view_sub), (25, 0));
         let drawn = ed
             .wrap()
-            .screen_rows(&b.rope, b.view_top, b.view_sub, 10)
+            .screen_rows(&b.rope, w.view_top, w.view_sub, 10)
             .iter()
             .map(|r| r.line)
             .collect::<Vec<_>>();
         assert_eq!(drawn, (25..35).collect::<Vec<_>>());
         assert_eq!(
             ed.wrap()
-                .screen_row(&b.rope, b.view_top, b.view_sub, b.cursor),
+                .screen_row(&b.rope, w.view_top, w.view_sub, b.cursor),
             Some(5)
         );
         assert_eq!(ed.pending, Pending::None);
@@ -1060,7 +1061,7 @@ mod tests {
         );
         assert_eq!(ed.pending, Pending::None);
         assert_eq!(ed.buf().cursor, Pos { line: 30, col: 2 });
-        assert_eq!(ed.buf().view_top, 0);
+        assert_eq!(ed.win().view_top, 0);
     }
 
     #[test]

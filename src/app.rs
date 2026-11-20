@@ -350,16 +350,6 @@ impl Editor {
         }
     }
 
-    pub fn scroll_win_to_cursor(&mut self, win: usize, rows: usize) {
-        if win >= self.windows.len() {
-            return;
-        }
-        let saved = self.active_win;
-        self.active_win = win;
-        self.scroll_to_cursor(rows);
-        self.active_win = saved;
-    }
-
     pub fn tab_width(&self) -> usize {
         self.config.tab_width.max(1) as usize
     }
@@ -405,13 +395,25 @@ impl Editor {
         }
     }
 
+    /// Pulls each window's viewport anchor back onto the buffer it shows: a
+    /// buffer can shrink while its window is unfocused and nobody scrolls it.
+    pub fn clamp_views(&mut self) {
+        for w in &mut self.windows {
+            let last = self.buffers[w.cur_buf()].rope.len_lines().saturating_sub(1);
+            if w.view_top > last {
+                w.view_top = last;
+                w.view_sub = 0;
+            }
+        }
+    }
+
     pub fn scroll_to_cursor(&mut self, rows: usize) {
         self.buf_mut().clamp();
         let last = self.buf().rope.len_lines().saturating_sub(1);
-        if self.buf().view_top > last {
-            let b = self.buf_mut();
-            b.view_top = last;
-            b.view_sub = 0;
+        if self.win().view_top > last {
+            let w = self.win_mut();
+            w.view_top = last;
+            w.view_sub = 0;
         }
         if rows == 0 {
             return;
@@ -421,8 +423,8 @@ impl Editor {
         let last = self.buf().rope.len_lines().saturating_sub(1);
         let rows_at = |line: usize| wrap.rope_row_count(&self.buf().rope, line);
         let cursor = self.buf().cursor;
-        let mut top = self.buf().view_top.min(last);
-        let mut sub = self.buf().view_sub.min(rows_at(top) - 1);
+        let mut top = self.win().view_top.min(last);
+        let mut sub = self.win().view_sub.min(rows_at(top) - 1);
         let wc = wrap
             .rope_pos(&self.buf().rope, cursor.line.min(last), cursor.col)
             .0;
@@ -495,9 +497,9 @@ impl Editor {
                 sub = rows_at(top) - 1;
             }
         }
-        let b = self.buf_mut();
-        b.view_top = top;
-        b.view_sub = sub;
+        let w = self.win_mut();
+        w.view_top = top;
+        w.view_sub = sub;
     }
 
     pub fn refresh_spell_spans(&mut self) {
@@ -507,8 +509,8 @@ impl Editor {
         }
         self.spell.sync_personal(&self.config.spell_dict);
         let last = self.buf().rope.len_lines().saturating_sub(1);
-        let start = self.buf().view_top.min(last);
-        let end = (self.buf().view_top + self.rows()).min(last);
+        let start = self.win().view_top.min(last);
+        let end = (self.win().view_top + self.rows()).min(last);
         let rope = &self.buf().rope;
         let stale: Vec<(usize, u64, String)> = (start..=end)
             .filter_map(|line| {
@@ -599,9 +601,9 @@ impl Editor {
                 .min(total.saturating_sub(rows));
             wrap.anchor(&b.rope, top_row)
         };
-        let b = self.buf_mut();
-        b.view_top = top;
-        b.view_sub = sub;
+        let w = self.win_mut();
+        w.view_top = top;
+        w.view_sub = sub;
     }
 
     pub fn clear_pending(&mut self) {
@@ -1630,10 +1632,10 @@ impl Editor {
         };
         let b = &self.buffers[w.cur_buf()];
         let wrap = self.wrap_with(w.view_cols);
-        let rows = wrap.screen_rows(&b.rope, b.view_top, b.view_sub, drow + 1);
+        let rows = wrap.screen_rows(&b.rope, w.view_top, w.view_sub, drow + 1);
         let Some(row) = rows.last() else {
             return Pos {
-                line: b.view_top,
+                line: w.view_top,
                 col: 0,
             };
         };
@@ -2799,7 +2801,7 @@ mod tests {
         assert_eq!(ed.pos_at_window(0, 0, 0), Pos { line: 0, col: 0 });
         assert_eq!(ed.pos_at_window(0, 3, 4), Pos { line: 3, col: 4 });
         assert_eq!(ed.pos_at_window(0, 1, 100), Pos { line: 1, col: 5 });
-        ed.buf_mut().view_top = 6;
+        ed.win_mut().view_top = 6;
         assert_eq!(ed.pos_at_window(0, 1, 2), Pos { line: 7, col: 2 });
         assert_eq!(
             ed.pos_at_window(0, 60, 0),
@@ -3219,33 +3221,33 @@ mod tests {
     fn scrolling_keeps_eight_lines_of_context() {
         let mut ed = ed_with(&"x\n".repeat(100));
         let rows = 24;
-        ed.buf_mut().view_top = 0;
+        ed.win_mut().view_top = 0;
         ed.buf_mut().cursor = Pos { line: 20, col: 0 };
         ed.scroll_to_cursor(rows);
-        assert_eq!(ed.buf().view_top, 5);
+        assert_eq!(ed.win().view_top, 5);
         ed.buf_mut().cursor = Pos { line: 6, col: 0 };
         ed.scroll_to_cursor(rows);
-        assert_eq!(ed.buf().view_top, 0);
+        assert_eq!(ed.win().view_top, 0);
         ed.buf_mut().cursor = Pos { line: 90, col: 0 };
         ed.scroll_to_cursor(rows);
-        assert_eq!(ed.buf().view_top, 75);
+        assert_eq!(ed.win().view_top, 75);
         ed.buf_mut().cursor = Pos { line: 84, col: 0 };
         ed.scroll_to_cursor(rows);
-        assert_eq!(ed.buf().view_top, 75);
+        assert_eq!(ed.win().view_top, 75);
     }
 
     #[test]
     fn scrolloff_yields_at_the_ends_of_the_buffer() {
         let mut ed = ed_with(&"x\n".repeat(20));
-        ed.buf_mut().view_top = 15;
+        ed.win_mut().view_top = 15;
         ed.buf_mut().cursor = Pos { line: 19, col: 0 };
         ed.scroll_to_cursor(24);
-        assert_eq!(ed.buf().view_top, 0);
+        assert_eq!(ed.win().view_top, 0);
 
         let mut tiny = ed_with(&"x\n".repeat(4));
         tiny.buf_mut().cursor = Pos { line: 3, col: 0 };
         tiny.scroll_to_cursor(3);
-        assert_eq!(tiny.buf().view_top, 2);
+        assert_eq!(tiny.win().view_top, 2);
     }
 
     #[test]
@@ -3474,11 +3476,11 @@ mod tests {
         ed.buf_mut().cursor = Pos { line: 0, col: 39 };
         ed.scroll_to_cursor(4);
         let b = ed.buf();
-        assert_eq!(b.view_top, 0);
-        assert_eq!(b.view_sub, 1);
+        let w = ed.win();
+        assert_eq!((w.view_top, w.view_sub), (0, 1));
         assert_eq!(
             ed.wrap()
-                .screen_row(&b.rope, b.view_top, b.view_sub, b.cursor),
+                .screen_row(&b.rope, w.view_top, w.view_sub, b.cursor),
             Some(2)
         );
     }
@@ -3489,10 +3491,11 @@ mod tests {
         ed.buf_mut().cursor = Pos { line: 40, col: 0 };
         ed.center_cursor(10);
         let b = ed.buf();
-        assert_eq!((b.view_top, b.view_sub), (35, 0));
+        let w = ed.win();
+        assert_eq!((w.view_top, w.view_sub), (35, 0));
         assert_eq!(
             ed.wrap()
-                .screen_row(&b.rope, b.view_top, b.view_sub, b.cursor),
+                .screen_row(&b.rope, w.view_top, w.view_sub, b.cursor),
             Some(5)
         );
     }
@@ -3503,21 +3506,22 @@ mod tests {
         ed.buf_mut().cursor = Pos { line: 9, col: 0 };
         ed.center_cursor(6);
         let b = ed.buf();
-        assert_eq!((b.view_top, b.view_sub), (5, 0));
+        let w = ed.win();
+        assert_eq!((w.view_top, w.view_sub), (5, 0));
         assert_eq!(
             ed.wrap()
-                .screen_row(&b.rope, b.view_top, b.view_sub, b.cursor),
+                .screen_row(&b.rope, w.view_top, w.view_sub, b.cursor),
             Some(4)
         );
 
         ed.buf_mut().cursor = Pos { line: 10, col: 0 };
         ed.center_cursor(6);
-        assert_eq!((ed.buf().view_top, ed.buf().view_sub), (5, 0));
+        assert_eq!((ed.win().view_top, ed.win().view_sub), (5, 0));
 
         let mut short = ed_with("a\nb\n");
         short.buf_mut().cursor = Pos { line: 2, col: 0 };
         short.center_cursor(10);
-        assert_eq!((short.buf().view_top, short.buf().view_sub), (0, 0));
+        assert_eq!((short.win().view_top, short.win().view_sub), (0, 0));
     }
 
     #[test]
@@ -3528,10 +3532,11 @@ mod tests {
         ed.buf_mut().cursor = Pos { line: 5, col: 15 };
         ed.center_cursor(6);
         let b = ed.buf();
-        assert_eq!((b.view_top, b.view_sub), (4, 0));
+        let w = ed.win();
+        assert_eq!((w.view_top, w.view_sub), (4, 0));
         assert_eq!(
             ed.wrap()
-                .screen_row(&b.rope, b.view_top, b.view_sub, b.cursor),
+                .screen_row(&b.rope, w.view_top, w.view_sub, b.cursor),
             Some(3)
         );
     }
@@ -3541,9 +3546,9 @@ mod tests {
         let mut ed = ed_with(&"x\n".repeat(100));
         ed.buf_mut().cursor = Pos { line: 40, col: 0 };
         ed.center_cursor(10);
-        let before = (ed.buf().view_top, ed.buf().view_sub);
+        let before = (ed.win().view_top, ed.win().view_sub);
         ed.scroll_to_cursor(10);
-        assert_eq!((ed.buf().view_top, ed.buf().view_sub), before);
+        assert_eq!((ed.win().view_top, ed.win().view_sub), before);
     }
     #[test]
     fn open_below_on_the_last_line_moves_cursor_to_the_new_line() {
@@ -3826,8 +3831,8 @@ mod tests {
         ed.buf_mut().cursor = Pos { line: last, col: 0 };
         let t = std::time::Instant::now();
         ed.scroll_to_cursor(50);
-        assert_eq!(ed.buf().view_top, last - 49);
-        assert_eq!(ed.buf().view_sub, 0);
+        assert_eq!(ed.win().view_top, last - 49);
+        assert_eq!(ed.win().view_sub, 0);
         assert!(
             t.elapsed().as_secs() < 2,
             "scroll_to_cursor took {:?}",
@@ -3836,7 +3841,7 @@ mod tests {
         ed.buf_mut().cursor = Pos { line: 0, col: 0 };
         let t = std::time::Instant::now();
         ed.scroll_to_cursor(50);
-        assert_eq!(ed.buf().view_top, 0);
+        assert_eq!(ed.win().view_top, 0);
         assert!(t.elapsed().as_millis() < 500);
     }
 
@@ -4152,5 +4157,32 @@ mod tests {
         assert_eq!(ed.win().tabs.len(), 1);
         assert_eq!(text(&ed), "a\n");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn windows_on_one_buffer_hold_their_own_place() {
+        let mut ed = ed_with(&"x\n".repeat(100));
+        ed.split(Axis::Columns);
+        ed.windows[0].view_top = 60;
+        assert_eq!(ed.windows[0].cur_buf(), ed.windows[1].cur_buf());
+        ed.buf_mut().cursor = Pos { line: 90, col: 0 };
+        ed.scroll_to_cursor(24);
+        assert_eq!(ed.windows[1].view_top, 75, "the typed-in window follows");
+        assert_eq!(
+            ed.windows[0].view_top, 60,
+            "the other window keeps its own place"
+        );
+    }
+
+    #[test]
+    fn a_shrunken_buffer_clamps_every_window_view() {
+        let mut ed = ed_with(&"x\n".repeat(100));
+        ed.split(Axis::Columns);
+        ed.windows[0].view_top = 60;
+        ed.buf_mut().rope = ropey::Rope::from_str("one\ntwo");
+        ed.buf_mut().after_edit();
+        ed.clamp_views();
+        assert_eq!(ed.windows[0].view_top, 1);
+        assert_eq!(ed.windows[1].view_top, 0);
     }
 }

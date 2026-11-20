@@ -103,7 +103,9 @@ or stacked. Splitting again reports `Only one split is allowed`, so close the
 focused window before changing the axis.
 
 Every window has its own tab strip, line-number gutter, wrap width and scroll
-position. `Ctrl-w` starts a window command:
+position, so two windows on the same buffer can sit at different lines: only
+the window you type in follows the cursor, the other keeps its place until the
+mouse wheel or a focus change moves it.
 
 | Key | Action |
 | --- | --- |

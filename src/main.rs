@@ -246,17 +246,17 @@ impl ApplicationHandler for App {
                         MouseScrollDelta::PixelDelta(pos) => pos.y / ch as f64,
                     };
                     let win = over.unwrap_or(ed.active_win);
-                    let buf = ed.windows[win].cur_buf();
-                    let cols = ed.windows[win].view_cols.max(1);
                     let (top, sub) = {
-                        let b = &ed.buffers[buf];
+                        let w = &ed.windows[win];
+                        let b = &ed.buffers[w.cur_buf()];
+                        let cols = w.view_cols.max(1);
                         let notches = (notches * 3.0).round() as i64;
                         ed.wrap_with(cols)
-                            .scroll(&b.rope, b.view_top, b.view_sub, -notches)
+                            .scroll(&b.rope, w.view_top, w.view_sub, -notches)
                     };
-                    let b = &mut ed.buffers[buf];
-                    b.view_top = top;
-                    b.view_sub = sub;
+                    let w = &mut ed.windows[win];
+                    w.view_top = top;
+                    w.view_sub = sub;
                     if let Some(w) = &self.window {
                         w.request_redraw();
                     }
@@ -429,9 +429,10 @@ impl App {
             return;
         };
         let b = ed.buf();
-        let wrap = ed.wrap_with(ed.win().view_cols.max(1));
+        let win = ed.win();
+        let wrap = ed.wrap_with(win.view_cols.max(1));
         let row = wrap
-            .screen_row(&b.rope, b.view_top, b.view_sub, b.cursor)
+            .screen_row(&b.rope, win.view_top, win.view_sub, b.cursor)
             .unwrap_or(0);
         let x = (r.x
             + r.gutter
@@ -515,10 +516,10 @@ impl App {
                 win.view_cols = (w.cols as usize).saturating_sub(w.gutter as usize).max(1);
             }
         }
+        ed.clamp_views();
         ed.poll_lsp();
-        for w in &grid.wins {
-            ed.scroll_win_to_cursor(w.win, w.body_rows() as usize);
-        }
+        let rows = grid.focus(ed).map_or(0, |w| w.body_rows() as usize);
+        ed.scroll_to_cursor(rows);
         let lsp_busy = ed.lsp.busy();
         self.tab_ranges =
             render::tab_hit_ranges(ed, &grid, text.cell_w.max(1.0), text.cell_h.max(1.0));
