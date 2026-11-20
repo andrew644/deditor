@@ -89,7 +89,7 @@ pub struct Completions {
 
 #[derive(PartialEq, Eq, Debug)]
 pub enum Cmd {
-    Write,
+    Write(bool),
     WriteQuit(bool),
     Quit(bool),
     Edit(String),
@@ -112,7 +112,7 @@ pub fn parse_cmd(s: &str) -> Result<Cmd, String> {
         None => (core, ""),
     };
     match (head, arg) {
-        ("w", "") => Ok(Cmd::Write),
+        ("w", "") => Ok(Cmd::Write(bang)),
         ("wq" | "x", "") => Ok(Cmd::WriteQuit(bang)),
         ("q", "") => Ok(Cmd::Quit(bang)),
         ("bnext" | "bn", "") => Ok(Cmd::BNext),
@@ -1444,9 +1444,9 @@ impl Editor {
                 self.cmdline_col = 0;
                 self.mode = Mode::Normal;
                 match cmd {
-                    Cmd::Write => self.write_active(),
+                    Cmd::Write(force) => self.write_active(force),
                     Cmd::WriteQuit(bang) => {
-                        self.write_active();
+                        self.write_active(bang);
                         if self.status_err {
                             return;
                         }
@@ -1530,7 +1530,11 @@ impl Editor {
         }
     }
 
-    pub fn write_active(&mut self) {
+    pub fn write_active(&mut self, force: bool) {
+        if !force && self.buf().changed_on_disk() {
+            self.set_status("E13: file changed on disk, use :w!".into(), true);
+            return;
+        }
         let res = self.buf().save();
         match res {
             Ok(()) => {
@@ -1706,6 +1710,12 @@ impl Editor {
         self.lsp.hover = None;
         self.lsp.completion = None;
         self.spell.clear();
+        self.mode = Mode::Normal;
+        self.pending = mode::Pending::None;
+        self.visual_anchor = None;
+        self.visual_linewise = false;
+        self.visual_block = false;
+        self.prefer_x = None;
     }
 
     pub fn activate(&mut self, i: usize) {
@@ -2544,7 +2554,8 @@ mod tests {
 
     #[test]
     fn parse_cmd_grammar() {
-        assert_eq!(parse_cmd("w"), Ok(Cmd::Write));
+        assert_eq!(parse_cmd("w"), Ok(Cmd::Write(false)));
+        assert_eq!(parse_cmd("w!"), Ok(Cmd::Write(true)));
         assert_eq!(parse_cmd("wq"), Ok(Cmd::WriteQuit(false)));
         assert_eq!(parse_cmd("q!"), Ok(Cmd::Quit(true)));
         assert_eq!(parse_cmd("x"), Ok(Cmd::WriteQuit(false)));
@@ -3118,6 +3129,37 @@ mod tests {
     }
 
     #[test]
+    fn write_refuses_a_file_changed_on_disk() {
+        let dir = std::env::temp_dir().join(format!("deditor_stale_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("s.txt");
+        std::fs::write(&f, "on disk\n").unwrap();
+        let mut ed = Editor::new(Some(&f));
+        ed.config.clipboard = false;
+        ed.buf_mut().insert_text("in editor\n", false);
+        let old = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        std::fs::File::options()
+            .write(true)
+            .open(&f)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(old))
+            .unwrap();
+        ed.cmdline = "w".to_string();
+        ed.execute_cmdline();
+        assert!(ed.status_err, "a stale write must report an error");
+        assert_eq!(std::fs::read_to_string(&f).unwrap(), "on disk\n");
+        ed.cmdline = "w!".to_string();
+        ed.execute_cmdline();
+        assert!(!ed.status_err);
+        assert_eq!(
+            std::fs::read_to_string(&f).unwrap(),
+            "in editor\non disk\n",
+            ":w! must write anyway"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn quit_checks_every_buffer() {
         let dir = std::env::temp_dir().join(format!("deditor_quit_all_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -3544,11 +3586,37 @@ mod tests {
             prefix: String::new(),
         });
         ed.buffers.push(Buffer::empty());
+        ed.start_visual(false);
         ed.close_buffer(None, true);
         assert_eq!(ed.buffers.len(), 1);
         assert!(ed.spell.spans.is_empty());
         assert!(ed.lsp.hover.is_none());
         assert!(ed.lsp.completion.is_none());
+        assert_eq!(ed.mode, Mode::Normal);
+        assert!(ed.visual_anchor.is_none());
+    }
+
+    #[test]
+    fn visual_selection_does_not_follow_a_buffer_switch() {
+        let mut ed = Editor::test_new();
+        ed.config.clipboard = false;
+        ed.buf_mut().insert_text("one\ntwo\nthree\n", false);
+        ed.start_visual(true);
+        ed.buf_mut().cursor = Pos { line: 2, col: 0 };
+        ed.buffers.push(Buffer::empty());
+        ed.activate(1);
+        ed.buf_mut().insert_text("alpha\nbeta\n", false);
+        let before = ed.buffers[1].rope.to_string();
+        key_down(
+            &mut ed,
+            &Key::Character("d".into()),
+            ModifiersState::empty(),
+        );
+        assert_eq!(
+            ed.buffers[1].rope.to_string(),
+            before,
+            "a selection made in another buffer must not delete here"
+        );
     }
 
     #[test]

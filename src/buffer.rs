@@ -1,6 +1,7 @@
 use ropey::Rope;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct Pos {
@@ -36,6 +37,7 @@ pub struct Buffer {
     pub sign_rev: u64,
     pub blame: Vec<crate::git::BlameLine>,
     pub blame_rev: u64,
+    pub disk_time: Option<SystemTime>,
 }
 
 pub fn line_chars(rope: &Rope, line: usize) -> usize {
@@ -124,6 +126,7 @@ impl Buffer {
             sign_rev: u64::MAX,
             blame: Vec::new(),
             blame_rev: u64::MAX,
+            disk_time: None,
         }
     }
 
@@ -136,6 +139,7 @@ impl Buffer {
         let rope = Rope::from_str(&text);
         Ok(Self {
             path: Some(path.to_path_buf()),
+            disk_time: Self::stamp(Some(path)),
             saved: rope.clone(),
             rope,
             crlf,
@@ -146,6 +150,7 @@ impl Buffer {
     pub fn new_file(path: &Path) -> Self {
         Self {
             path: Some(path.to_path_buf()),
+            disk_time: Self::stamp(Some(path)),
             ..Self::empty()
         }
     }
@@ -202,6 +207,22 @@ impl Buffer {
     pub fn mark_saved(&mut self) {
         self.saved = self.rope.clone();
         self.dirty = false;
+        self.disk_time = Self::stamp(self.path.as_deref());
+    }
+
+    /// Modification time of the file on disk, if it is there.
+    fn stamp(path: Option<&Path>) -> Option<SystemTime> {
+        path.and_then(|p| fs::metadata(p).ok())
+            .and_then(|m| m.modified().ok())
+    }
+
+    /// Whether something else has rewritten the file since this buffer read or
+    /// wrote it, in which case saving would drop those changes.
+    pub fn changed_on_disk(&self) -> bool {
+        let Some(written) = self.disk_time else {
+            return false;
+        };
+        Self::stamp(self.path.as_deref()).is_some_and(|m| m != written)
     }
 
     pub fn after_edit(&mut self) {
@@ -429,6 +450,30 @@ mod tests {
         assert!(!b.dirty);
         b.undo();
         assert!(b.dirty);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn changed_on_disk_notices_an_external_write() {
+        let dir = std::env::temp_dir().join("deditor_mtime_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("m.txt");
+        std::fs::write(&f, "alpha\n").unwrap();
+        let mut b = Buffer::load(&f).unwrap();
+        assert!(!b.changed_on_disk());
+        let old = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        std::fs::File::options()
+            .write(true)
+            .open(&f)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(old))
+            .unwrap();
+        assert!(
+            b.changed_on_disk(),
+            "a rewrite by anything else must not be silently overwritten"
+        );
+        b.mark_saved();
+        assert!(!b.changed_on_disk());
         std::fs::remove_dir_all(&dir).ok();
     }
 

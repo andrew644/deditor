@@ -228,7 +228,7 @@ fn normal_key(ed: &mut Editor, key: &Key, mods: ModifiersState) {
                 ed.run_motion(Motion::Zero, 1);
             }
         } else {
-            ed.count = ed.count.saturating_mul(10).saturating_add(d);
+            ed.count = ed.count.saturating_mul(10).saturating_add(d).min(9999);
         }
         return;
     }
@@ -598,7 +598,9 @@ fn visual_key(ed: &mut Editor, k: &str, count: u32) {
                 ed.block_apply(Operator::Delete);
             } else {
                 let ((a, b), _) = ed.sel_range();
-                ed.buf_mut().delete_text(a, b);
+                if a < b {
+                    ed.buf_mut().delete_text(a, b);
+                }
                 ed.mode = Mode::Normal;
                 ed.visual_anchor = None;
             }
@@ -891,6 +893,34 @@ mod tests {
         );
         assert_eq!(ed.buf().rope.to_string(), "a xb");
         assert_eq!(ed.buf().cursor, Pos { line: 0, col: 3 });
+    }
+
+    #[test]
+    fn count_stays_bounded() {
+        let mut ed = Editor::test_new();
+        let nines: Vec<Key> = (0..10).map(|_| Key::Character("9".into())).collect();
+        type_keys(&mut ed, &nines);
+        assert!(ed.count <= 9999, "count must not run away: {}", ed.count);
+    }
+
+    #[test]
+    fn visual_paste_needs_a_selection() {
+        let mut ed = Editor::test_new();
+        ed.config.clipboard = false;
+        ed.buf_mut().insert_text("ab\n", false);
+        ed.buf_mut().cursor = Pos { line: 0, col: 2 };
+        ed.register.clear();
+        let undo = ed.buffers[0].undo.len();
+        type_keys(
+            &mut ed,
+            &[Key::Character("v".into()), Key::Character("p".into())],
+        );
+        assert_eq!(
+            ed.buffers[0].undo.len(),
+            undo,
+            "pasting over nothing must not be recorded as an edit"
+        );
+        assert_eq!(ed.buf().rope.to_string(), "ab\n");
     }
 
     #[test]

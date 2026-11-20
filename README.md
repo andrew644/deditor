@@ -149,7 +149,8 @@ rectangle segment per line, padding short lines.
 
 | Command | Action |
 | --- | --- |
-| `:w` | write (save) file |
+| `:w` | write (save) file (refused if the file changed on disk) |
+| `:w!` | same, even if the file changed on disk since it was read |
 | `:q` | close the focused window; quit when it is the last one (fails if a buffer is dirty) |
 | `:q!` | same, discarding changes |
 | `:wq` / `:x` | write and quit (fails if another buffer is dirty) |
